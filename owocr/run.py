@@ -331,7 +331,32 @@ class TextFiltering:
 
         orig_text_filtered = []
         for block in orig_text:
+<<<<<<< Updated upstream
             block_filtered = self.kana_kanji_regex.findall(block)
+=======
+            if lang == "ja":
+                block_filtered = self.kana_kanji_regex.findall(block)
+            elif lang == "zh":
+                block_filtered = self.chinese_common_regex.findall(block)
+            elif lang == "ko":
+                block_filtered = self.korean_regex.findall(block)
+            elif lang == "ar":
+                block_filtered = self.arabic_regex.findall(block)
+            elif lang == "ru":
+                block_filtered = self.russian_regex.findall(block)
+            elif lang == "el":
+                block_filtered = self.greek_regex.findall(block)
+            elif lang == "he":
+                block_filtered = self.hebrew_regex.findall(block)
+            elif lang == "th":
+                block_filtered = self.thai_regex.findall(block)
+            elif lang in ["en", "fr", "de", "es", "it", "pt", "nl", "sv", "da", "no",
+                          "fi"]:  # Many European languages use extended Latin
+                block_filtered = self.latin_extended_regex.findall(block)
+            else:
+                block_filtered = self.latin_extended_regex.findall(block)
+
+>>>>>>> Stashed changes
             if block_filtered:
                 orig_text_filtered.append(''.join(block_filtered))
             else:
@@ -457,6 +482,7 @@ class ScreenshotThread(threading.Thread):
                     self.macos_window_tracker_instance.start()
                 logger.opt(ansi=True).info(f'Selected window: {window_title}')
             elif sys.platform == 'win32':
+<<<<<<< Updated upstream
                 self.window_handle, window_title = self.get_windows_window_handle(screen_capture_area)
 
                 if not self.window_handle:
@@ -470,6 +496,46 @@ class ScreenshotThread(threading.Thread):
             else:
                 raise ValueError('Window capture is only currently supported on Windows and macOS')
 
+=======
+                self.persistent_window_tracker_instance = threading.Thread(target=self.setup_persistent_windows_window_tracker)
+                self.persistent_window_tracker_instance.start()
+            else:
+                raise ValueError('Window capture is only currently supported on Windows and macOS')
+
+    def __del__(self):
+        if self.macos_window_tracker_instance:
+            self.macos_window_tracker_instance.join()
+        elif self.windows_window_tracker_instance:
+            self.windows_window_tracker_instance.join()
+
+    def setup_persistent_windows_window_tracker(self):
+        global window_open
+        window_open = False
+        def setup_tracker():
+            global window_open
+            self.window_handle, window_title = self.get_windows_window_handle(self.screen_capture_window)
+
+            if not self.window_handle:
+                # print(f"Window '{screen_capture_window}' not found.")
+                return
+
+            set_dpi_awareness()
+            window_open = True
+            self.windows_window_tracker_instance = threading.Thread(target=self.windows_window_tracker)
+            self.windows_window_tracker_instance.start()
+            logger.opt(ansi=True).info(f'Selected window: {window_title}')
+
+        while not terminated:
+            if not window_open:
+                try:
+                    setup_tracker()
+                except ValueError as e:
+                    logger.error(f"Error setting up persistent windows window tracker: {e}")
+                    break
+            time.sleep(5)
+
+
+>>>>>>> Stashed changes
     def get_windows_window_handle(self, window_title):
         def callback(hwnd, window_title_part):
             window_title = win32gui.GetWindowText(hwnd)
@@ -492,7 +558,7 @@ class ScreenshotThread(threading.Thread):
 
     def windows_window_tracker(self):
         found = True
-        while not terminated:
+        while not terminated or window_open:
             found = win32gui.IsWindow(self.window_handle)
             if not found:
                 break
@@ -765,10 +831,11 @@ def signal_handler(sig, frame):
 
 
 def on_window_closed(alive):
-    global terminated
+    global terminated, window_open
     if not (alive or terminated):
         logger.info('Window closed or error occurred, terminated!')
-        terminated = True
+        window_open = False
+        # terminated = True
 
 
 def on_screenshot_combo():

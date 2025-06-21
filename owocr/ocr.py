@@ -5,13 +5,14 @@ from pathlib import Path
 import sys
 import platform
 import logging
-from math import sqrt
+from math import sqrt, floor
 import json
 import base64
 from urllib.parse import urlparse, parse_qs
 
 import jaconv
 import numpy as np
+import rapidfuzz.fuzz
 from PIL import Image
 from loguru import logger
 import requests
@@ -763,14 +764,118 @@ class OneOCR:
             except:
                 logger.warning('Error reading URL from config, OneOCR will not work!')
 
+<<<<<<< Updated upstream
     def __call__(self, img):
         img, is_path = input_to_pil_image(img)
+=======
+    def __call__(self, img, furigana_filter_sensitivity=0, sentence_to_check=None):
+        img = input_to_pil_image(img)
+        if img.width < 51 or img.height < 51:
+            new_width = max(img.width, 51)
+            new_height = max(img.height, 51)
+            new_img = Image.new("RGBA", (new_width, new_height), (0, 0, 0, 0))
+            new_img.paste(img, ((new_width - img.width) // 2, (new_height - img.height) // 2))
+            img = new_img
+
+>>>>>>> Stashed changes
         if not img:
             return (False, 'Invalid image provided')
 
         if sys.platform == 'win32':
             try:
+<<<<<<< Updated upstream
                 res = self.model.recognize_pil(img)['text']
+=======
+                ocr_resp = self.model.recognize_pil(img)
+                # print(json.dumps(ocr_resp))
+
+
+                # with open(os.path.join(get_temporary_directory(), 'oneocr_response.json'), 'w',
+                #           encoding='utf-8') as f:
+                #     json.dump(ocr_resp, f, indent=4, ensure_ascii=False)
+                res = ''
+                skipped = []
+                if furigana_filter_sensitivity > 0:
+                    for line in ocr_resp['lines']:
+                        x1, x2, x3, x4 = line['bounding_rect']['x1'], line['bounding_rect']['x2'], \
+                            line['bounding_rect']['x3'], line['bounding_rect']['x4']
+                        y1, y2, y3, y4 = line['bounding_rect']['y1'], line['bounding_rect']['y2'], \
+                            line['bounding_rect']['y3'], line['bounding_rect']['y4']
+                        width = max(x2 - x1, x3 - x4)
+                        height = max(y3 - y1, y4 - y2)
+                        if width > furigana_filter_sensitivity and height > furigana_filter_sensitivity:
+                            res += line['text']
+                        else:
+                            skipped.extend(char for char in line['text'])
+                            continue
+                        res += '\n'
+                    # logger.info(
+                    #     f"Skipped {len(skipped)} chars due to furigana filter sensitivity: {furigana_filter_sensitivity}")
+                    # widths, heights = [], []
+                    # for line in ocr_resp['lines']:
+                    #     for word in line['words']:
+                    #         if self.kana_kanji_regex.search(word['text']) is None:
+                    #             continue
+                    #         # x1, x2, x3, x4 = line['bounding_rect']['x1'], line['bounding_rect']['x2'], line['bounding_rect']['x3'], line['bounding_rect']['x4']
+                    #         # y1, y2, y3, y4 = line['bounding_rect']['y1'], line['bounding_rect']['y2'], line['bounding_rect']['y3'], line['bounding_rect']['y4']
+                    #         x1, x2, x3, x4 = word['bounding_rect']['x1'], word['bounding_rect']['x2'], \
+                    #         word['bounding_rect']['x3'], word['bounding_rect']['x4']
+                    #         y1, y2, y3, y4 = word['bounding_rect']['y1'], word['bounding_rect']['y2'], \
+                    #         word['bounding_rect']['y3'], word['bounding_rect']['y4']
+                    #         widths.append(max(x2 - x1, x3 - x4))
+                    #         heights.append(max(y2 - y1, y3 - y4))
+                    #
+                    #
+                    # max_width = max(sorted(widths)[:-max(1, len(widths) // 10)]) if len(widths) > 1 else 0
+                    # max_height = max(sorted(heights)[:-max(1, len(heights) // 10)]) if len(heights) > 1 else 0
+                    #
+                    # required_width = max_width * furigana_filter_sensitivity
+                    # required_height = max_height * furigana_filter_sensitivity
+                    # for line in ocr_resp['lines']:
+                    #     for word in line['words']:
+                    #         x1, x2, x3, x4 = word['bounding_rect']['x1'], word['bounding_rect']['x2'], \
+                    #         word['bounding_rect']['x3'], word['bounding_rect']['x4']
+                    #         y1, y2, y3, y4 = word['bounding_rect']['y1'], word['bounding_rect']['y2'], \
+                    #         word['bounding_rect']['y3'], word['bounding_rect']['y4']
+                    #         width = max(x2 - x1, x3 - x4)
+                    #         height = max(y2 - y1, y3 - y4)
+                    #         if furigana_filter_sensitivity == 0 or width > required_width or height > required_height:
+                    #             res += word['text']
+                    #         else:
+                    #             continue
+                    #     res += '\n'
+                elif sentence_to_check:
+                    lines_to_build_area = []
+                    widths = []
+                    heights = []
+                    for line in ocr_resp['lines']:
+                        print(line['text'])
+                        if sentence_to_check in line['text'] or line['text'] in sentence_to_check or rapidfuzz.fuzz.partial_ratio(sentence_to_check, line['text']) > 50:
+                            lines_to_build_area.append(line)
+                            res += line['text']
+                            for word in line['words']:
+                                widths.append(word['bounding_rect']['x2'] - word['bounding_rect']['x1'])
+                                heights.append(word['bounding_rect']['y3'] - word['bounding_rect']['y1'])
+
+                    x_coords = [line['bounding_rect'][f'x{i}'] for line in lines_to_build_area for i in
+                                range(1, 5)]
+                    y_coords = [line['bounding_rect'][f'y{i}'] for line in lines_to_build_area for i in
+                                range(1, 5)]
+                    if widths:
+                        avg_width = sum(widths) / len(widths)
+                    if heights:
+                        avg_height = sum(heights) / len(heights)
+                    if x_coords and y_coords:
+                        crop_coords = (
+                            min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
+                else:
+                    x_coords = [line['bounding_rect'][f'x{i}'] for line in ocr_resp['lines'] for i in range(1, 5)]
+                    y_coords = [line['bounding_rect'][f'y{i}'] for line in ocr_resp['lines'] for i in range(1, 5)]
+                    if x_coords and y_coords:
+                        crop_coords = (min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
+
+                    res = ocr_resp['text']
+>>>>>>> Stashed changes
             except RuntimeError as e:
                 return (False, e)
         else:
@@ -786,7 +891,13 @@ class OneOCR:
 
             res = res.json()['text']
 
+<<<<<<< Updated upstream
         x = (True, res)
+=======
+        # print(avg_width)
+        # print(avg_height)
+        x = (True, res, crop_coords, 48)
+>>>>>>> Stashed changes
 
         if is_path:
             img.close()
