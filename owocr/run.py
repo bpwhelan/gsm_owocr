@@ -373,7 +373,7 @@ class TextFiltering:
                           "fi"]:  # Many European languages use extended Latin
                 block_filtered = self.latin_extended_regex.findall(block)
             else:
-                block_filtered = self.english_regex.findall(block)
+                block_filtered = self.latin_extended_regex.findall(block)
 
             if block_filtered:
                 orig_text_filtered.append(''.join(block_filtered))
@@ -826,21 +826,28 @@ def user_input_thread_run():
         global terminated
         logger.info('Terminated!')
         terminated = True
+    import sys
 
     if sys.platform == 'win32':
         import msvcrt
         while not terminated:
-            user_input_bytes = msvcrt.getch()
-            try:
-                user_input = user_input_bytes.decode()
+            user_input = None
+            if msvcrt.kbhit():  # Check if a key is pressed
+                user_input_bytes = msvcrt.getch()
+                try:
+                    user_input = user_input_bytes.decode()
+                except UnicodeDecodeError:
+                    pass
+            if not user_input:  # If no input from msvcrt, check stdin
+                import sys
+                user_input = sys.stdin.read(1)
+
                 if user_input.lower() in 'tq':
                     _terminate_handler()
                 elif user_input.lower() == 'p':
                     pause_handler(False)
                 else:
                     engine_change_handler(user_input, False)
-            except UnicodeDecodeError:
-                pass
     else:
         import tty, termios
         fd = sys.stdin.fileno()
@@ -1086,7 +1093,7 @@ def run(read_from=None,
             if config.get_engine(engine_class.name) == None:
                 engine_instance = engine_class()
             else:
-                engine_instance = engine_class(config.get_engine(engine_class.name))
+                engine_instance = engine_class(config.get_engine(engine_class.name), lang=lang)
 
             if engine_instance.available:
                 engine_instances.append(engine_instance)
