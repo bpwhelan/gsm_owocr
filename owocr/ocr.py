@@ -932,6 +932,7 @@ class OneOCR:
                     y_coords = [line['bounding_rect'][f'y{i}'] for line in ocr_resp['lines'] for i in range(1, 5)]
                     if x_coords and y_coords:
                         crop_coords = (min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
+                    res = ocr_resp['text']
 
             except RuntimeError as e:
                 return (False, e)
@@ -947,7 +948,7 @@ class OneOCR:
                 return (False, 'Unknown error!')
 
             res = res.json()['text']
-        x = (True, res, crop_coords, 48)
+        x = (True, res, crop_coords)
         if is_path:
             img.close()
         return x
