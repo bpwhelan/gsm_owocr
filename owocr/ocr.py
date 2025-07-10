@@ -764,28 +764,19 @@ class OneOCR:
             except:
                 logger.warning('Error reading URL from config, OneOCR will not work!')
 
-<<<<<<< Updated upstream
-    def __call__(self, img):
-        img, is_path = input_to_pil_image(img)
-=======
     def __call__(self, img, furigana_filter_sensitivity=0, sentence_to_check=None):
-        img = input_to_pil_image(img)
+        img, is_path = input_to_pil_image(img)
         if img.width < 51 or img.height < 51:
             new_width = max(img.width, 51)
             new_height = max(img.height, 51)
             new_img = Image.new("RGBA", (new_width, new_height), (0, 0, 0, 0))
             new_img.paste(img, ((new_width - img.width) // 2, (new_height - img.height) // 2))
             img = new_img
-
->>>>>>> Stashed changes
         if not img:
             return (False, 'Invalid image provided')
-
         if sys.platform == 'win32':
             try:
-<<<<<<< Updated upstream
                 res = self.model.recognize_pil(img)['text']
-=======
                 ocr_resp = self.model.recognize_pil(img)
                 # print(json.dumps(ocr_resp))
 
@@ -875,7 +866,6 @@ class OneOCR:
                         crop_coords = (min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
 
                     res = ocr_resp['text']
->>>>>>> Stashed changes
             except RuntimeError as e:
                 return (False, e)
         else:
@@ -890,15 +880,7 @@ class OneOCR:
                 return (False, 'Unknown error!')
 
             res = res.json()['text']
-
-<<<<<<< Updated upstream
-        x = (True, res)
-=======
-        # print(avg_width)
-        # print(avg_height)
         x = (True, res, crop_coords, 48)
->>>>>>> Stashed changes
-
         if is_path:
             img.close()
         return x
