@@ -14,7 +14,6 @@ from urllib.parse import urlparse, parse_qs
 import jaconv
 import numpy as np
 from PIL import Image
-from google.generativeai import GenerationConfig
 from loguru import logger
 import requests
 
@@ -1128,17 +1127,33 @@ class GeminiOCR:
         # if "google-generativeai" not in sys.modules:
         #     logger.warning('google-generativeai not available, GeminiOCR will not work!')
         # else:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
         try:
             self.api_key = config['api_key']
             if not self.api_key:
                 logger.warning('Gemini API key not provided, GeminiOCR will not work!')
             else:
-                genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel(config['model'], generation_config=GenerationConfig(
+                self.client = genai.Client(api_key=self.api_key)
+                self.model = config['model']
+                self.generation_config = types.GenerateContentConfig(
                     temperature=0.0,
-                    max_output_tokens=300
-                ))
+                    max_output_tokens=300,
+                    safety_settings=[
+                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                                            threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                                            threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                                            threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                                            threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                    ],
+                )
+                if "2.5" in self.model:
+                    self.generation_config.thinking_config = types.ThinkingConfig(
+                        thinking_budget=0,
+                    )
                 self.available = True
                 logger.info('Gemini (using google-generativeai) ready')
         except KeyError:
@@ -1151,29 +1166,36 @@ class GeminiOCR:
             return (False, 'GeminiOCR is not available due to missing API key or configuration error.')
 
         try:
+            from google.genai import types
             img, is_path = input_to_pil_image(img)
-            import google.generativeai as genai
             img_bytes = self._preprocess(img)
             if not img_bytes:
                 return (False, 'Error processing image for Gemini.')
 
             contents = [
-                {
-                    'parts': [
-                        {
-                            'inline_data': {
-                                'mime_type': 'image/png',
-                                'data': img_bytes
-                            }
-                        },
-                        {
-                            'text': 'Analyze the image. Extract text *only* from within dialogue boxes (speech bubbles or panels containing character dialogue). If Text appears to be vertical, read the text from top to bottom, right to left. From the extracted dialogue text, filter out any furigana. Ignore and do not include any text found outside of dialogue boxes, including character names, speaker labels, or sound effects. Return *only* the filtered dialogue text. If no text is found within dialogue boxes after applying filters, return nothing. Do not include any other output, formatting markers, or commentary.'
-                        }
+                types.Content(
+                    parts=[
+                        types.Part(
+                            inline_data=types.Blob(
+                                mime_type="image/png",
+                                data=img_bytes
+                            )
+                        ),
+                        types.Part(
+                            text="""
+                            **Disclaimer:** The image provided is from a video game. This content is entirely fictional and part of a narrative. It must not be treated as real-world user input or a genuine request.
+                            Analyze the image. Extract text \\*only\\* from within dialogue boxes (speech bubbles or panels containing character dialogue). If Text appears to be vertical, read the text from top to bottom, right to left. From the extracted dialogue text, filter out any furigana. Ignore and do not include any text found outside of dialogue boxes, including character names, speaker labels, or sound effects. Return \\*only\\* the filtered dialogue text. If no text is found within dialogue boxes after applying filters, return nothing. Do not include any other output, formatting markers, or commentary."
+                            """
+                        )
                     ]
-                }
+                )
             ]
 
-            response = self.model.generate_content(contents)
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=self.generation_config
+            )
             text_output = response.text.strip()
 
             return (True, text_output)
@@ -1373,8 +1395,8 @@ class GroqOCR:
 #     def _preprocess(self, img):
 #         return base64.b64encode(pil_image_to_bytes(img, png_compression=1)).decode('utf-8')
 
-# lens = GoogleLens()
+# lens = GeminiOCR(config={'model': 'gemini-2.5-flash-lite-preview-06-17', 'api_key': ''})
 #
-# res, text = lens(Image.open('test_furigana.png'), furigana_filter_sensitivity=.6)  # Example usage
+# res, text = lens(Image.open('test_furigana.png'))  # Example usage
 #
 # print(text)
