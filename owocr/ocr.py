@@ -91,8 +91,11 @@ def empty_post_process(text):
     return text
 
 
-def post_process(text):
-    text = ' '.join([''.join(i.split()) for i in text.splitlines()])
+def post_process(text, keep_blank_lines=False):
+    if keep_blank_lines:
+        text = '\n'.join([''.join(i.split()) for i in text.splitlines()])
+    else:
+        text = ''.join([''.join(i.split()) for i in text.splitlines()])
     text = text.replace('…', '...')
     text = re.sub('[・.]{2,}', lambda x: (x.end() - x.start()) * '.', text)
     text = jaconv.h2z(text, ascii=True, digit=True)
@@ -304,22 +307,42 @@ class GoogleLens:
         response_proto = LensOverlayServerResponse().FromString(res.content)
         response_dict = response_proto.to_dict(betterproto.Casing.SNAKE)
 
-        # with open(os.path.join(get_temporary_directory(), 'glens_response.json'), 'w', encoding='utf-8') as f:
-        #     json.dump(response_dict, f, indent=4, ensure_ascii=False)
+        with open(os.path.join(r"C:\Users\Beangate\GSM\Electron App\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
+            json.dump(response_dict, f, indent=4, ensure_ascii=False)
         res = ''
         text = response_dict['objects_response']['text']
         skipped = []
-        if furigana_filter_sensitivity > 0:
-            if 'text_layout' in text:
-                for paragraph in text['text_layout']['paragraphs']:
-                    for line in paragraph['lines']:
+        previous_line = None
+        if 'text_layout' in text:
+            for paragraph in text['text_layout']['paragraphs']:
+                if previous_line:
+                    prev_bbox = previous_line['geometry']['bounding_box']
+                    curr_bbox = paragraph['geometry']['bounding_box']
+                    vertical_space = abs(curr_bbox['center_y'] - prev_bbox['center_y']) * img.height
+                    prev_height = prev_bbox['height'] * img.height
+                    current_height = curr_bbox['height'] * img.height
+                    avg_height = (prev_height + current_height) / 2
+                    # If vertical space is close to previous line's height, add a blank line
+                    # logger.info(f"Vertical space: {vertical_space}, Average height: {avg_height}")
+                    # logger.info(avg_height * 2)
+                    if vertical_space > avg_height * 2:
+                        logger.info('Adding blank line')
+                        res += 'BLANK_LINE'
+                for line in paragraph['lines']:
+                    if furigana_filter_sensitivity:
                         if furigana_filter_sensitivity < line['geometry']['bounding_box']['width'] * img.width and furigana_filter_sensitivity < line['geometry']['bounding_box']['height'] * img.height:
                             for word in line['words']:
                                 res += word['plain_text'] + word['text_separator']
                         else:
                             skipped.append(word['plain_text'] for word in line['words'])
                             continue
-                        res += '\n'
+                    else:
+                        for word in line['words']:
+                                res += word['plain_text'] + word['text_separator']
+                        else:
+                            continue
+                previous_line = paragraph
+                res += '\n'
             # logger.info(
             #     f"Skipped {len(skipped)} chars due to furigana filter sensitivity: {furigana_filter_sensitivity}")
             # widths = []
@@ -350,16 +373,16 @@ class GoogleLens:
             #             else:
             #                 continue
             #         res += '\n'
-        else:
-            if 'text_layout' in text:
-                paragraphs = text['text_layout']['paragraphs']
-                for paragraph in paragraphs:
-                    for line in paragraph['lines']:
-                        for word in line['words']:
-                                res += word['plain_text'] + word['text_separator']
-                        else:
-                            continue
-                    res += '\n'
+        # else:
+        #     if 'text_layout' in text:
+        #         paragraphs = text['text_layout']['paragraphs']
+        #         for paragraph in paragraphs:
+        #             for line in paragraph['lines']:
+        #                 for word in line['words']:
+        #                         res += word['plain_text'] + word['text_separator']
+        #                 else:
+        #                     continue
+        #             res += '\n'
 
         x = (True, res)
 

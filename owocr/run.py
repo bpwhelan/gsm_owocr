@@ -353,7 +353,9 @@ class TextFiltering:
 
         orig_text_filtered = []
         for block in orig_text:
-            if lang == "ja":
+            if "BLANK_LINE" in block:
+                block_filtered = ["\n"]
+            elif lang == "ja":
                 block_filtered = self.kana_kanji_regex.findall(block)
             elif lang == "zh":
                 block_filtered = self.chinese_common_regex.findall(block)
@@ -394,7 +396,8 @@ class TextFiltering:
         new_blocks = []
         for idx, block in enumerate(orig_text):
             if orig_text_filtered[idx] and (orig_text_filtered[idx] not in last_text):
-                new_blocks.append(block)
+                new_blocks.append(str(block).strip().replace("BLANK_LINE", "\n"))
+
 
         final_blocks = []
         if self.accurate_filtering:
@@ -407,8 +410,9 @@ class TextFiltering:
         else:
             for block in new_blocks:
                 # This only filters out NON JA/ZH from text when lang is JA/ZH
-                if lang not in ["ja", "zh"] or self.classify(block)[0] in ['ja', 'zh']:
+                if lang not in ["ja", "zh"] or self.classify(block)[0] in ['ja', 'zh'] or block == "\n":
                     final_blocks.append(block)
+
 
         text = '\n'.join(final_blocks)
         return text, orig_text_filtered
@@ -937,7 +941,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
         if filtering:
             text, orig_text = filtering(text, last_result)
         if lang == "ja" or lang == "zh":
-            text = post_process(text)
+            text = post_process(text, keep_blank_lines=keep_new_lines)
         logger.opt(ansi=True).info(f'Text recognized in {end_time - start_time:0.03f}s using <{engine_color}>{engine_instance.readable_name}</{engine_color}>: {text}')
         if notify and config.get_general('notifications'):
             notifier.send(title='owocr', message='Text recognized: ' + text)
@@ -999,6 +1003,7 @@ def run(read_from=None,
         ocr2=None,
         gsm_ocr_config=None,
         furigana_filter_sensitivity=None,
+        keep_line_breaks=False,
         ):
     """
     Japanese OCR client
@@ -1075,11 +1080,13 @@ def run(read_from=None,
     global engine_instances
     global engine_keys
     global lang
+    global keep_new_lines
     lang = language
     engine_instances = []
     config_engines = []
     engine_keys = []
     default_engine = ''
+    keep_new_lines = keep_line_breaks
 
     if len(config.get_general('engines')) > 0:
         for config_engine in config.get_general('engines').split(','):
