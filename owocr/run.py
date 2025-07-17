@@ -806,11 +806,11 @@ class OBSScreenshotThread(threading.Thread):
 
         self.connect_obs()
         self.ocr_config.scale_to_custom_size(self.width, self.height)
+        current_source = obs.get_active_source()
+        current_source_name = current_source.get('sourceName') if isinstance(current_source, dict) else None
 
         while not terminated:
             try:
-                current_source = obs.get_active_source()
-                current_source_name = current_source.get('sourceName') if isinstance(current_source, dict) else None
                 response = self.obs_client.get_source_screenshot(
                     name=current_source_name,
                     img_format='png',
