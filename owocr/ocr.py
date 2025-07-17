@@ -307,8 +307,8 @@ class GoogleLens:
         response_proto = LensOverlayServerResponse().FromString(res.content)
         response_dict = response_proto.to_dict(betterproto.Casing.SNAKE)
 
-        with open(os.path.join(r"C:\Users\Beangate\GSM\Electron App\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
-            json.dump(response_dict, f, indent=4, ensure_ascii=False)
+        # with open(os.path.join(r"C:\Users\Beangate\GSM\Electron App\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
+        #     json.dump(response_dict, f, indent=4, ensure_ascii=False)
         res = ''
         text = response_dict['objects_response']['text']
         skipped = []
