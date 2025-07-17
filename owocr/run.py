@@ -55,7 +55,7 @@ except ImportError:
     pass
 from .config import Config
 from .screen_coordinate_picker import get_screen_selection
-from GameSentenceMiner.util.configuration import get_temporary_directory
+from GameSentenceMiner.util.configuration import get_temporary_directory, get_config
 
 config = None
 
@@ -763,6 +763,100 @@ class ScreenshotThread(threading.Thread):
         elif self.windows_window_tracker_instance:
             self.windows_window_tracker_instance.join()
 
+# Use OBS for Screenshot Source (i.e. Linux)
+class OBSScreenshotThread(threading.Thread):
+    def __init__(self, ocr_config, screen_capture_on_combo, width=1280, height=720, interval=1):
+        super().__init__(daemon=True)
+        self.ocr_config = ocr_config
+        self.interval = interval
+        self.obs_client = None
+        self.websocket = None
+        self.width = width
+        self.height = height
+        self.use_periodic_queue = not screen_capture_on_combo
+
+    def write_result(self, result):
+        if self.use_periodic_queue:
+            periodic_screenshot_queue.put(result)
+        else:
+            image_queue.put((result, True))
+
+    def connect_obs(self):
+        try:
+            import obsws_python as obs
+            self.obs_client = obs.ReqClient(
+                host=get_config().obs.host,
+                port=get_config().obs.port,
+                password=get_config().obs.password,
+                timeout=10
+            )
+            logger.info("Connected to OBS WebSocket.")
+        except Exception as e:
+            logger.error(f"Failed to connect to OBS: {e}")
+            self.obs_client = None
+
+    def run(self):
+        import base64
+        import io
+        from PIL import Image
+        import GameSentenceMiner.obs as obs
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        self.connect_obs()
+        self.ocr_config.scale_to_custom_size(self.width, self.height)
+
+        while not terminated:
+            try:
+                current_source = obs.get_active_source()
+                current_source_name = current_source.get('sourceName') if isinstance(current_source, dict) else None
+                response = self.obs_client.get_source_screenshot(
+                    name=current_source_name,
+                    img_format='png',
+                    quality=75,
+                    width=self.width,
+                    height=self.height,
+                )
+
+                if response.image_data:
+                    image_data = base64.b64decode(response.image_data.split(",")[1])
+                    img = Image.open(io.BytesIO(image_data)).convert("RGBA")
+
+                    for rectangle in self.ocr_config.rectangles:
+                        if rectangle.is_excluded:
+                            left, top, width, height = rectangle.coordinates
+                            draw = ImageDraw.Draw(img)
+                            draw.rectangle((left, top, left + width, top + height), fill=(0, 0, 0, 0))
+
+                    cropped_sections = []
+                    for rectangle in [r for r in self.ocr_config.rectangles if not r.is_excluded]:
+                        area = rectangle.coordinates
+                        cropped_sections.append(img.crop((area[0], area[1], area[0] + area[2], area[1] + area[3])))
+
+                    if len(cropped_sections) > 1:
+                        combined_width = max(section.width for section in cropped_sections)
+                        combined_height = sum(section.height for section in cropped_sections) + (
+                            len(cropped_sections) - 1) * 10
+                        combined_img = Image.new("RGBA", (combined_width, combined_height))
+                        y_offset = 0
+                        for section in cropped_sections:
+                            combined_img.paste(section, (0, y_offset))
+                            y_offset += section.height + 50
+                        img = combined_img
+                    elif cropped_sections:
+                        img = cropped_sections[0]
+
+                    self.write_result(img)
+                else:
+                    logger.error("Failed to get screenshot data from OBS.")
+
+            except Exception as e:
+                logger.error(f"An unexpected error occurred with OBS connection: {e}")
+                continue
+
+            time.sleep(self.interval)
+
 class AutopauseTimer:
     def __init__(self, timeout):
         self.stop_event = threading.Event()
@@ -1137,7 +1231,7 @@ def run(read_from=None,
     prefix_to_use = ""
     delay_secs = config.get_general('delay_secs')
 
-    non_path_inputs = ('screencapture', 'clipboard', 'websocket', 'unixsocket')
+    non_path_inputs = ('screencapture', 'clipboard', 'websocket', 'unixsocket', 'obs')
     read_from_path = None
     read_from_readable = []
     terminated = False
@@ -1176,22 +1270,33 @@ def run(read_from=None,
         global txt_callback
         txt_callback = text_callback
 
-    if 'screencapture' in (read_from, read_from_secondary):
-        global take_screenshot
+    if 'screencapture' in (read_from, read_from_secondary) or 'obs' in (read_from, read_from_secondary):
         global screenshot_event
-        last_screenshot_time = 0
-        last_result = ([], engine_index)
+        global take_screenshot
         if screen_capture_combo != '':
             screen_capture_on_combo = True
             key_combos[screen_capture_combo] = on_screenshot_combo
         else:
             global periodic_screenshot_queue
             periodic_screenshot_queue = queue.Queue()
+
+    if 'screencapture' in (read_from, read_from_secondary):
+        last_screenshot_time = 0
+        last_result = ([], engine_index)
+
         screenshot_event = threading.Event()
         screenshot_thread = ScreenshotThread(screen_capture_area, screen_capture_window, screen_capture_exclusions, screen_capture_only_active_windows, screen_capture_areas, screen_capture_on_combo)
         screenshot_thread.start()
         filtering = TextFiltering()
         read_from_readable.append('screen capture')
+    if 'obs' in (read_from, read_from_secondary):
+        last_screenshot_time = 0
+        last_result = ([], engine_index)
+        screenshot_event = threading.Event()
+        obs_screenshot_thread = OBSScreenshotThread(gsm_ocr_config, screen_capture_on_combo, interval=screen_capture_delay_secs)
+        obs_screenshot_thread.start()
+        filtering = TextFiltering()
+        read_from_readable.append('obs')
     if 'websocket' in (read_from, read_from_secondary):
         read_from_readable.append('websocket')
     if 'unixsocket' in (read_from, read_from_secondary):
@@ -1231,7 +1336,7 @@ def run(read_from=None,
         write_to_readable = f'file {write_to}'
 
     process_queue = (any(i in ('clipboard', 'websocket', 'unixsocket') for i in (read_from, read_from_secondary)) or read_from_path or screen_capture_on_combo)
-    process_screenshots = 'screencapture' in (read_from, read_from_secondary) and not screen_capture_on_combo
+    process_screenshots = any(x in ('screencapture', 'obs') for x in (read_from, read_from_secondary)) and not screen_capture_on_combo
     if threading.current_thread() == threading.main_thread():
         signal.signal(signal.SIGINT, signal_handler)
     if (not process_screenshots) and auto_pause != 0:
@@ -1256,7 +1361,7 @@ def run(read_from=None,
                 pass
 
         if (not img) and process_screenshots:
-            if (not paused) and screenshot_thread.screencapture_window_active and screenshot_thread.screencapture_window_visible and (time.time() - last_screenshot_time) > screen_capture_delay_secs:
+            if (not paused) and (not screenshot_thread or (screenshot_thread.screencapture_window_active and screenshot_thread.screencapture_window_visible)) and (time.time() - last_screenshot_time) > screen_capture_delay_secs:
                 screenshot_event.set()
                 img = periodic_screenshot_queue.get()
                 filter_img = True

@@ -326,7 +326,6 @@ class GoogleLens:
                     # logger.info(f"Vertical space: {vertical_space}, Average height: {avg_height}")
                     # logger.info(avg_height * 2)
                     if vertical_space > avg_height * 2:
-                        logger.info('Adding blank line')
                         res += 'BLANK_LINE'
                 for line in paragraph['lines']:
                     if furigana_filter_sensitivity:
