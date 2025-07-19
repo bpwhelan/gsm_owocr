@@ -17,6 +17,8 @@ from PIL import Image
 from loguru import logger
 import requests
 
+from GameSentenceMiner.util.electron_config import get_ocr_language
+
 # from GameSentenceMiner.util.configuration import get_temporary_directory
 
 try:
@@ -809,25 +811,8 @@ class OneOCR:
     available = False
 
     def __init__(self, config={}, lang='ja'):
-        if lang == "ja":
-            self.regex = re.compile(r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
-        elif lang == "zh":
-            self.regex = re.compile(r'[\u4E00-\u9FFF]')
-        elif lang == "ko":
-            self.regex = re.compile(r'[\uAC00-\uD7AF]')
-        elif lang == "ar":
-            self.regex = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
-        elif lang == "ru":
-            self.regex = re.compile(r'[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u1C80-\u1C8F]')
-        elif lang == "el":
-            self.regex = re.compile(r'[\u0370-\u03FF\u1F00-\u1FFF]')
-        elif lang == "he":
-            self.regex = re.compile(r'[\u0590-\u05FF\uFB1D-\uFB4F]')
-        elif lang == "th":
-            self.regex = re.compile(r'[\u0E00-\u0E7F]')
-        else:
-            self.regex = re.compile(
-            r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
+        self.initial_lang = lang
+        self.get_regex(lang)
         if sys.platform == 'win32':
             if int(platform.release()) < 10:
                 logger.warning('OneOCR is not supported on Windows older than 10!')
@@ -849,7 +834,32 @@ class OneOCR:
             except:
                 logger.warning('Error reading URL from config, OneOCR will not work!')
 
+    def get_regex(self, lang):
+        if lang == "ja":
+            self.regex = re.compile(r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
+        elif lang == "zh":
+            self.regex = re.compile(r'[\u4E00-\u9FFF]')
+        elif lang == "ko":
+            self.regex = re.compile(r'[\uAC00-\uD7AF]')
+        elif lang == "ar":
+            self.regex = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+        elif lang == "ru":
+            self.regex = re.compile(r'[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u1C80-\u1C8F]')
+        elif lang == "el":
+            self.regex = re.compile(r'[\u0370-\u03FF\u1F00-\u1FFF]')
+        elif lang == "he":
+            self.regex = re.compile(r'[\u0590-\u05FF\uFB1D-\uFB4F]')
+        elif lang == "th":
+            self.regex = re.compile(r'[\u0E00-\u0E7F]')
+        else:
+            self.regex = re.compile(
+            r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
+
     def __call__(self, img, furigana_filter_sensitivity=0):
+        lang = get_ocr_language()
+        if lang != self.initial_lang:
+            self.initial_lang = lang
+            self.get_regex(lang)
         img, is_path = input_to_pil_image(img)
         if img.width < 51 or img.height < 51:
             new_width = max(img.width, 51)
