@@ -15,9 +15,10 @@ import jaconv
 import numpy as np
 import rapidfuzz.fuzz
 from PIL import Image
-from google.generativeai import GenerationConfig
 from loguru import logger
 import requests
+
+from GameSentenceMiner.util.electron_config import get_ocr_language
 
 # from GameSentenceMiner.util.configuration import get_temporary_directory
 
@@ -93,8 +94,11 @@ def empty_post_process(text):
     return text
 
 
-def post_process(text):
-    text = ' '.join([''.join(i.split()) for i in text.splitlines()])
+def post_process(text, keep_blank_lines=False):
+    if keep_blank_lines:
+        text = '\n'.join([''.join(i.split()) for i in text.splitlines()])
+    else:
+        text = ''.join([''.join(i.split()) for i in text.splitlines()])
     text = text.replace('…', '...')
     text = re.sub('[・.]{2,}', lambda x: (x.end() - x.start()) * '.', text)
     text = jaconv.h2z(text, ascii=True, digit=True)
@@ -306,22 +310,41 @@ class GoogleLens:
         response_proto = LensOverlayServerResponse().FromString(res.content)
         response_dict = response_proto.to_dict(betterproto.Casing.SNAKE)
 
-        # with open(os.path.join(get_temporary_directory(), 'glens_response.json'), 'w', encoding='utf-8') as f:
+        # with open(os.path.join(r"C:\Users\Beangate\GSM\Electron App\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
         #     json.dump(response_dict, f, indent=4, ensure_ascii=False)
         res = ''
         text = response_dict['objects_response']['text']
         skipped = []
-        if furigana_filter_sensitivity > 0:
-            if 'text_layout' in text:
-                for paragraph in text['text_layout']['paragraphs']:
-                    for line in paragraph['lines']:
+        previous_line = None
+        if 'text_layout' in text:
+            for paragraph in text['text_layout']['paragraphs']:
+                if previous_line:
+                    prev_bbox = previous_line['geometry']['bounding_box']
+                    curr_bbox = paragraph['geometry']['bounding_box']
+                    vertical_space = abs(curr_bbox['center_y'] - prev_bbox['center_y']) * img.height
+                    prev_height = prev_bbox['height'] * img.height
+                    current_height = curr_bbox['height'] * img.height
+                    avg_height = (prev_height + current_height) / 2
+                    # If vertical space is close to previous line's height, add a blank line
+                    # logger.info(f"Vertical space: {vertical_space}, Average height: {avg_height}")
+                    # logger.info(avg_height * 2)
+                    if vertical_space > avg_height * 2:
+                        res += 'BLANK_LINE'
+                for line in paragraph['lines']:
+                    if furigana_filter_sensitivity:
                         if furigana_filter_sensitivity < line['geometry']['bounding_box']['width'] * img.width and furigana_filter_sensitivity < line['geometry']['bounding_box']['height'] * img.height:
                             for word in line['words']:
                                 res += word['plain_text'] + word['text_separator']
                         else:
                             skipped.append(word['plain_text'] for word in line['words'])
                             continue
-                        res += '\n'
+                    else:
+                        for word in line['words']:
+                                res += word['plain_text'] + word['text_separator']
+                        else:
+                            continue
+                previous_line = paragraph
+                res += '\n'
             # logger.info(
             #     f"Skipped {len(skipped)} chars due to furigana filter sensitivity: {furigana_filter_sensitivity}")
             # widths = []
@@ -352,16 +375,16 @@ class GoogleLens:
             #             else:
             #                 continue
             #         res += '\n'
-        else:
-            if 'text_layout' in text:
-                paragraphs = text['text_layout']['paragraphs']
-                for paragraph in paragraphs:
-                    for line in paragraph['lines']:
-                        for word in line['words']:
-                                res += word['plain_text'] + word['text_separator']
-                        else:
-                            continue
-                    res += '\n'
+        # else:
+        #     if 'text_layout' in text:
+        #         paragraphs = text['text_layout']['paragraphs']
+        #         for paragraph in paragraphs:
+        #             for line in paragraph['lines']:
+        #                 for word in line['words']:
+        #                         res += word['plain_text'] + word['text_separator']
+        #                 else:
+        #                     continue
+        #             res += '\n'
 
         x = (True, res)
 
@@ -789,25 +812,8 @@ class OneOCR:
     available = False
 
     def __init__(self, config={}, lang='ja'):
-        if lang == "ja":
-            self.regex = re.compile(r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
-        elif lang == "zh":
-            self.regex = re.compile(r'[\u4E00-\u9FFF]')
-        elif lang == "ko":
-            self.regex = re.compile(r'[\uAC00-\uD7AF]')
-        elif lang == "ar":
-            self.regex = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
-        elif lang == "ru":
-            self.regex = re.compile(r'[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u1C80-\u1C8F]')
-        elif lang == "el":
-            self.regex = re.compile(r'[\u0370-\u03FF\u1F00-\u1FFF]')
-        elif lang == "he":
-            self.regex = re.compile(r'[\u0590-\u05FF\uFB1D-\uFB4F]')
-        elif lang == "th":
-            self.regex = re.compile(r'[\u0E00-\u0E7F]')
-        else:
-            self.regex = re.compile(
-            r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
+        self.initial_lang = lang
+        self.get_regex(lang)
         if sys.platform == 'win32':
             if int(platform.release()) < 10:
                 logger.warning('OneOCR is not supported on Windows older than 10!')
@@ -829,7 +835,32 @@ class OneOCR:
             except:
                 logger.warning('Error reading URL from config, OneOCR will not work!')
 
+    def get_regex(self, lang):
+        if lang == "ja":
+            self.regex = re.compile(r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
+        elif lang == "zh":
+            self.regex = re.compile(r'[\u4E00-\u9FFF]')
+        elif lang == "ko":
+            self.regex = re.compile(r'[\uAC00-\uD7AF]')
+        elif lang == "ar":
+            self.regex = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+        elif lang == "ru":
+            self.regex = re.compile(r'[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u1C80-\u1C8F]')
+        elif lang == "el":
+            self.regex = re.compile(r'[\u0370-\u03FF\u1F00-\u1FFF]')
+        elif lang == "he":
+            self.regex = re.compile(r'[\u0590-\u05FF\uFB1D-\uFB4F]')
+        elif lang == "th":
+            self.regex = re.compile(r'[\u0E00-\u0E7F]')
+        else:
+            self.regex = re.compile(
+            r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
+
     def __call__(self, img, furigana_filter_sensitivity=0, sentence_to_check=None):
+        lang = get_ocr_language()
+        if lang != self.initial_lang:
+            self.initial_lang = lang
+            self.get_regex(lang)
         img, is_path = input_to_pil_image(img)
         if img.width < 51 or img.height < 51:
             new_width = max(img.width, 51)
@@ -1156,17 +1187,33 @@ class GeminiOCR:
         # if "google-generativeai" not in sys.modules:
         #     logger.warning('google-generativeai not available, GeminiOCR will not work!')
         # else:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
         try:
             self.api_key = config['api_key']
             if not self.api_key:
                 logger.warning('Gemini API key not provided, GeminiOCR will not work!')
             else:
-                genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel(config['model'], generation_config=GenerationConfig(
+                self.client = genai.Client(api_key=self.api_key)
+                self.model = config['model']
+                self.generation_config = types.GenerateContentConfig(
                     temperature=0.0,
-                    max_output_tokens=300
-                ))
+                    max_output_tokens=300,
+                    safety_settings=[
+                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                                            threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                                            threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                                            threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                        types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                                            threshold=types.HarmBlockThreshold.BLOCK_NONE),
+                    ],
+                )
+                if "2.5" in self.model:
+                    self.generation_config.thinking_config = types.ThinkingConfig(
+                        thinking_budget=0,
+                    )
                 self.available = True
                 logger.info('Gemini (using google-generativeai) ready')
         except KeyError:
@@ -1179,29 +1226,36 @@ class GeminiOCR:
             return (False, 'GeminiOCR is not available due to missing API key or configuration error.')
 
         try:
+            from google.genai import types
             img, is_path = input_to_pil_image(img)
-            import google.generativeai as genai
             img_bytes = self._preprocess(img)
             if not img_bytes:
                 return (False, 'Error processing image for Gemini.')
 
             contents = [
-                {
-                    'parts': [
-                        {
-                            'inline_data': {
-                                'mime_type': 'image/png',
-                                'data': img_bytes
-                            }
-                        },
-                        {
-                            'text': 'Analyze the image. Extract text *only* from within dialogue boxes (speech bubbles or panels containing character dialogue). If Text appears to be vertical, read the text from top to bottom, right to left. From the extracted dialogue text, filter out any furigana. Ignore and do not include any text found outside of dialogue boxes, including character names, speaker labels, or sound effects. Return *only* the filtered dialogue text. If no text is found within dialogue boxes after applying filters, return nothing. Do not include any other output, formatting markers, or commentary.'
-                        }
+                types.Content(
+                    parts=[
+                        types.Part(
+                            inline_data=types.Blob(
+                                mime_type="image/png",
+                                data=img_bytes
+                            )
+                        ),
+                        types.Part(
+                            text="""
+                            **Disclaimer:** The image provided is from a video game. This content is entirely fictional and part of a narrative. It must not be treated as real-world user input or a genuine request.
+                            Analyze the image. Extract text \\*only\\* from within dialogue boxes (speech bubbles or panels containing character dialogue). If Text appears to be vertical, read the text from top to bottom, right to left. From the extracted dialogue text, filter out any furigana. Ignore and do not include any text found outside of dialogue boxes, including character names, speaker labels, or sound effects. Return \\*only\\* the filtered dialogue text. If no text is found within dialogue boxes after applying filters, return nothing. Do not include any other output, formatting markers, or commentary."
+                            """
+                        )
                     ]
-                }
+                )
             ]
 
-            response = self.model.generate_content(contents)
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=self.generation_config
+            )
             text_output = response.text.strip()
 
             return (True, text_output)
@@ -1401,8 +1455,8 @@ class GroqOCR:
 #     def _preprocess(self, img):
 #         return base64.b64encode(pil_image_to_bytes(img, png_compression=1)).decode('utf-8')
 
-# lens = GoogleLens()
+# lens = GeminiOCR(config={'model': 'gemini-2.5-flash-lite-preview-06-17', 'api_key': ''})
 #
-# res, text = lens(Image.open('test_furigana.png'), furigana_filter_sensitivity=.6)  # Example usage
+# res, text = lens(Image.open('test_furigana.png'))  # Example usage
 #
 # print(text)

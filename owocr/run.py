@@ -1,4 +1,5 @@
-from ...ocr.gsm_ocr_config import set_dpi_awareness
+from ...ocr.gsm_ocr_config import set_dpi_awareness, get_scene_ocr_config_path, OCRConfig, get_scene_ocr_config
+from ...util.electron_config import *
 
 try:
     import win32gui
@@ -55,9 +56,10 @@ except ImportError:
     pass
 from .config import Config
 from .screen_coordinate_picker import get_screen_selection
-from GameSentenceMiner.util.configuration import get_temporary_directory
+from GameSentenceMiner.util.configuration import get_temporary_directory, get_config
 
 config = None
+last_image = None
 
 
 class ClipboardThread(threading.Thread):
@@ -309,9 +311,10 @@ class RequestHandler(socketserver.BaseRequestHandler):
 class TextFiltering:
     accurate_filtering = False
 
-    def __init__(self, lang="ja"):
+    def __init__(self, lang='ja'):
         from pysbd import Segmenter
-        self.segmenter = Segmenter(language=lang, clean=True)
+        self.initial_lang = get_ocr_language() or lang
+        self.segmenter = Segmenter(language=get_ocr_language(), clean=True)
         self.kana_kanji_regex = re.compile(r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
         self.chinese_common_regex = re.compile(r'[\u4E00-\u9FFF]')
         self.english_regex = re.compile(r'[a-zA-Z0-9.,!?;:"\'()\[\]{}]')
@@ -349,12 +352,18 @@ class TextFiltering:
             self.classify = langid.classify
 
     def __call__(self, text, last_result):
-        orig_text = self.segmenter.segment(text)
+        lang = get_ocr_language()
+        if self.initial_lang != lang:
+            from pysbd import Segmenter
+            self.segmenter = Segmenter(language=get_ocr_language(), clean=True)
+            self.initial_lang = get_ocr_language()
 
+        orig_text = self.segmenter.segment(text)
         orig_text_filtered = []
         for block in orig_text:
-            block_filtered = self.kana_kanji_regex.findall(block)
-            if lang == "ja":
+            if "BLANK_LINE" in block:
+                block_filtered = ["\n"]
+            elif lang == "ja":
                 block_filtered = self.kana_kanji_regex.findall(block)
             elif lang == "zh":
                 block_filtered = self.chinese_common_regex.findall(block)
@@ -394,7 +403,8 @@ class TextFiltering:
         new_blocks = []
         for idx, block in enumerate(orig_text):
             if orig_text_filtered[idx] and (orig_text_filtered[idx] not in last_text):
-                new_blocks.append(block)
+                new_blocks.append(str(block).strip().replace("BLANK_LINE", "\n"))
+
 
         final_blocks = []
         if self.accurate_filtering:
@@ -407,15 +417,16 @@ class TextFiltering:
         else:
             for block in new_blocks:
                 # This only filters out NON JA/ZH from text when lang is JA/ZH
-                if lang not in ["ja", "zh"] or self.classify(block)[0] in ['ja', 'zh']:
+                if lang not in ["ja", "zh"] or self.classify(block)[0] in ['ja', 'zh'] or block == "\n":
                     final_blocks.append(block)
+
 
         text = '\n'.join(final_blocks)
         return text, orig_text_filtered
 
 
 class ScreenshotThread(threading.Thread):
-    def __init__(self, screen_capture_area, screen_capture_window, screen_capture_exclusions, screen_capture_only_active_windows, screen_capture_areas, screen_capture_on_combo):
+    def __init__(self, screen_capture_area, screen_capture_window, screen_capture_exclusions, screen_capture_areas, screen_capture_on_combo):
         super().__init__(daemon=True)
         self.macos_window_tracker_instance = None
         self.windows_window_tracker_instance = None
@@ -486,7 +497,6 @@ class ScreenshotThread(threading.Thread):
 
 
         if self.screencapture_mode == 2 or self.screen_capture_window:
-            self.screen_capture_only_active_windows = screen_capture_only_active_windows
             area_invalid_error = '"screen_capture_area" must be empty, "screen_N" where N is a screen number starting from 1, a valid set of coordinates, or a valid window name'
             if sys.platform == 'darwin':
                 if config.get_general('screen_capture_old_macos_api') or int(platform.mac_ver()[0].split('.')[0]) < 14:
@@ -519,7 +529,7 @@ class ScreenshotThread(threading.Thread):
                 self.window_id = window_ids[window_index]
                 window_title = window_titles[window_index]
 
-                if self.screen_capture_only_active_windows:
+                if get_ocr_requires_open_window():
                     self.macos_window_tracker_instance = threading.Thread(target=self.macos_window_tracker)
                     self.macos_window_tracker_instance.start()
                 logger.opt(ansi=True).info(f'Selected window: {window_title}')
@@ -596,7 +606,7 @@ class ScreenshotThread(threading.Thread):
             found = win32gui.IsWindow(self.window_handle)
             if not found:
                 break
-            if self.screen_capture_only_active_windows:
+            if get_ocr_requires_open_window():
                 self.screencapture_window_active = self.window_handle == win32gui.GetForegroundWindow()
             else:
                 self.screencapture_window_visible = not win32gui.IsIconic(self.window_handle)
@@ -685,7 +695,14 @@ class ScreenshotThread(threading.Thread):
     def run(self):
         if self.screencapture_mode != 2:
             sct = mss.mss()
+        start = time.time()
         while not terminated:
+            if time.time() - start > 1:
+                start = time.time()
+                section_changed = has_ocr_config_changed()
+                if section_changed:
+                    reload_electron_config()
+
             if not screenshot_event.wait(timeout=0.1):
                 continue
             if self.screencapture_mode == 2 or self.screen_capture_window:
@@ -748,6 +765,11 @@ class ScreenshotThread(threading.Thread):
             else:
                 sct_img = sct.grab(self.sct_params)
                 img = Image.frombytes('RGB', sct_img.size, sct_img.bgra, 'raw', 'BGRX')
+                
+            if not img.getbbox():
+                logger.info("Screen Capture Didn't get Capturing anything, sleeping.")
+                time.sleep(1)
+                continue
 
             import random  # Ensure this is imported at the top of the file if not already
             rand_int = random.randint(1, 20)  # Executes only once out of 10 times
@@ -764,7 +786,12 @@ class ScreenshotThread(threading.Thread):
 
             cropped_sections = []
             for area in self.areas:
-                cropped_sections.append(img.crop((area[0], area[1], area[0] + area[2], area[1] + area[3])))
+                # Ensure crop coordinates are within image bounds
+                left = max(0, area[0])
+                top = max(0, area[1])
+                right = min(img.width, area[0] + area[2])
+                bottom = min(img.height, area[1] + area[3])
+                cropped_sections.append(img.crop((left, top, right, bottom)))
 
             if len(cropped_sections) > 1:
                 combined_width = max(section.width for section in cropped_sections)
@@ -784,13 +811,182 @@ class ScreenshotThread(threading.Thread):
             if rand_int == 1:
                 img.save(os.path.join(get_temporary_directory(), 'after_crop.png'), 'PNG')
 
-            self.write_result(img)
-            screenshot_event.clear()
+            if last_image and are_images_identical(img, last_image):
+                logger.debug("Captured screenshot is identical to the last one, sleeping.")
+                time.sleep(max(.5, get_ocr_scan_rate()))
+            else:
+                self.write_result(img)
+                screenshot_event.clear()
 
         if self.macos_window_tracker_instance:
             self.macos_window_tracker_instance.join()
         elif self.windows_window_tracker_instance:
             self.windows_window_tracker_instance.join()
+            
+            
+def set_last_image(image):
+    global last_image
+    if image == last_image:
+        return
+    try:
+        if last_image is not None and hasattr(last_image, "close"):
+            last_image.close()
+    except Exception:
+        pass
+    last_image = image
+    
+def are_images_identical(img1, img2):
+    if None in (img1, img2):
+        return img1 == img2
+
+    try: 
+        img1 = np.array(img1)
+        img2 = np.array(img2)
+    except Exception:
+        logger.warning("Failed to convert images to numpy arrays for comparison.")
+        # If conversion to numpy array fails, consider them not identical
+        return False
+    
+    return (img1.shape == img2.shape) and np.array_equal(img1, img2)
+
+
+# Use OBS for Screenshot Source (i.e. Linux)
+class OBSScreenshotThread(threading.Thread):
+    def __init__(self, ocr_config, screen_capture_on_combo, width=1280, height=720, interval=1):
+        super().__init__(daemon=True)
+        self.ocr_config = ocr_config
+        self.interval = interval
+        self.obs_client = None
+        self.websocket = None
+        self.current_source = None
+        self.current_source_name = None
+        self.current_scene = None
+        self.width = width
+        self.height = height
+        self.use_periodic_queue = not screen_capture_on_combo
+
+    def write_result(self, result):
+        if self.use_periodic_queue:
+            periodic_screenshot_queue.put(result)
+        else:
+            image_queue.put((result, True))
+
+    def connect_obs(self):
+        try:
+            import obsws_python as obs
+            self.obs_client = obs.ReqClient(
+                host=get_config().obs.host,
+                port=get_config().obs.port,
+                password=get_config().obs.password,
+                timeout=10
+            )
+            logger.info("Connected to OBS WebSocket.")
+        except Exception as e:
+            logger.error(f"Failed to connect to OBS: {e}")
+            self.obs_client = None
+
+    def run(self):
+        global last_image
+        import base64
+        import io
+        from PIL import Image
+        import GameSentenceMiner.obs as obs
+
+        def init_config(source=None, scene=None):
+            obs.update_current_game()
+            self.current_source = source if source else obs.get_active_source()
+            self.current_source_name = self.current_source.get('sourceName') if isinstance(self.current_source, dict) else None
+            self.current_scene = scene if scene else obs.get_current_game()
+            self.ocr_config = get_scene_ocr_config()
+            self.ocr_config.scale_to_custom_size(self.width, self.height)
+
+        # Register a scene switch callback in obsws
+        def on_scene_switch(scene):
+            logger.info(f"Scene switched to: {scene}. Loading new OCR config.")
+            init_config(scene=scene)
+
+        asyncio.run(obs.register_scene_change_callback(on_scene_switch))
+
+        self.connect_obs()
+        init_config()
+        start = time.time()
+        while not terminated:
+            if time.time() - start > 5:
+                if not self.obs_client:
+                    self.connect_obs()
+                else:
+                    try:
+                        self.obs_client.get_version()
+                    except Exception as e:
+                        logger.error(f"Lost connection to OBS: {e}")
+                        self.obs_client = None
+                        self.connect_obs()
+            if not screenshot_event.wait(timeout=0.1):
+                continue
+
+            if not self.ocr_config:
+                time.sleep(1)
+                continue
+
+            try:
+                response = self.obs_client.get_source_screenshot(
+                    name=self.current_source_name,
+                    img_format='png',
+                    quality=75,
+                    width=self.width,
+                    height=self.height,
+                )
+
+                if response.image_data:
+                    image_data = base64.b64decode(response.image_data.split(",")[1])
+                    img = Image.open(io.BytesIO(image_data)).convert("RGBA")
+                    
+                    if not img.getbbox():
+                        logger.info("OBS Not Capturing anything, sleeping.")
+                        time.sleep(1)
+                        continue
+
+                    for rectangle in self.ocr_config.rectangles:
+                        if rectangle.is_excluded:
+                            left, top, width, height = rectangle.coordinates
+                            draw = ImageDraw.Draw(img)
+                            draw.rectangle((left, top, left + width, top + height), fill=(0, 0, 0, 0))
+
+                    cropped_sections = []
+                    for rectangle in [r for r in self.ocr_config.rectangles if not r.is_excluded]:
+                        area = rectangle.coordinates
+                        # Ensure crop coordinates are within image bounds
+                        left = max(0, area[0])
+                        top = max(0, area[1])
+                        right = min(img.width, area[0] + area[2])
+                        bottom = min(img.height, area[1] + area[3])
+                        cropped_sections.append(img.crop((left, top, right, bottom)))
+
+                    if len(cropped_sections) > 1:
+                        combined_width = max(section.width for section in cropped_sections)
+                        combined_height = sum(section.height for section in cropped_sections) + (
+                            len(cropped_sections) - 1) * 10
+                        combined_img = Image.new("RGBA", (combined_width, combined_height))
+                        y_offset = 0
+                        for section in cropped_sections:
+                            combined_img.paste(section, (0, y_offset))
+                            y_offset += section.height + 50
+                        img = combined_img
+                    elif cropped_sections:
+                        img = cropped_sections[0]
+                        
+                    if last_image and are_images_identical(img, last_image):
+                        logger.debug("Captured screenshot is identical to the last one, sleeping.")
+                        time.sleep(max(.5, get_ocr_scan_rate()))
+                    else:
+                        self.write_result(img)
+                        screenshot_event.clear()
+                else:
+                    logger.error("Failed to get screenshot data from OBS.")
+
+            except Exception as e:
+                logger.error(f"An unexpected error occurred during OBS Capture : {e}", exc_info=True)
+                continue
 
 class AutopauseTimer:
     def __init__(self, timeout):
@@ -850,6 +1046,22 @@ def engine_change_handler(user_input='s', is_combo=True):
         new_engine_name = engine_instances[engine_index].readable_name
         if is_combo:
             notifier.send(title='owocr', message=f'Switched to {new_engine_name}')
+        engine_color = config.get_general('engine_color')
+        logger.opt(ansi=True).info(f'Switched to <{engine_color}>{new_engine_name}</{engine_color}>!')
+
+
+def engine_change_handler_name(engine):
+    global engine_index
+    old_engine_index = engine_index
+
+    for i, instance in enumerate(engine_instances):
+        if instance.name.lower() in engine.lower():
+            engine_index = i
+            break
+
+    if engine_index != old_engine_index:
+        new_engine_name = engine_instances[engine_index].readable_name
+        notifier.send(title='owocr', message=f'Switched to {new_engine_name}')
         engine_color = config.get_general('engine_color')
         logger.opt(ansi=True).info(f'Switched to <{engine_color}>{new_engine_name}</{engine_color}>!')
 
@@ -970,8 +1182,8 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
     if res:
         if filtering:
             text, orig_text = filtering(text, last_result)
-        if lang == "ja" or lang == "zh":
-            text = post_process(text)
+        if get_ocr_language() == "ja" or get_ocr_language() == "zh":
+            text = post_process(text, keep_blank_lines=get_ocr_keep_newline())
         logger.opt(ansi=True).info(f'Text recognized in {end_time - start_time:0.03f}s using <{engine_color}>{engine_instance.readable_name}</{engine_color}>: {text}')
         if notify and config.get_general('notifications'):
             notifier.send(title='owocr', message='Text recognized: ' + text)
@@ -1022,17 +1234,16 @@ def run(read_from=None,
         screen_capture_exclusions=None,
         screen_capture_window=None,
         screen_capture_delay_secs=None,
-        screen_capture_only_active_windows=None,
         screen_capture_combo=None,
         stop_running_flag=None,
         screen_capture_event_bus=None,
         text_callback=None,
-        language=None,
         monitor_index=None,
         ocr1=None,
         ocr2=None,
         gsm_ocr_config=None,
         furigana_filter_sensitivity=None,
+        config_check_thread=None
         ):
     """
     Japanese OCR client
@@ -1067,8 +1278,8 @@ def run(read_from=None,
     if screen_capture_area is None:
         screen_capture_area = config.get_general('screen_capture_area')
 
-    if screen_capture_only_active_windows is None:
-        screen_capture_only_active_windows = config.get_general('screen_capture_only_active_windows')
+    # if screen_capture_only_active_windows is None:
+    #     screen_capture_only_active_windows = config.get_general('screen_capture_only_active_windows')
 
     if screen_capture_exclusions is None:
         screen_capture_exclusions = config.get_general('screen_capture_exclusions')
@@ -1094,9 +1305,6 @@ def run(read_from=None,
     if write_to is None:
         write_to = config.get_general('write_to')
 
-    if language is None:
-        language = config.get_general('language', "ja")
-
     logger.configure(handlers=[{'sink': sys.stderr, 'format': config.get_general('logger_format')}])
 
     if config.has_config:
@@ -1108,8 +1316,6 @@ def run(read_from=None,
 
     global engine_instances
     global engine_keys
-    global lang
-    lang = language
     engine_instances = []
     config_engines = []
     engine_keys = []
@@ -1127,7 +1333,7 @@ def run(read_from=None,
             if config.get_engine(engine_class.name) == None:
                 engine_instance = engine_class()
             else:
-                engine_instance = engine_class(config.get_engine(engine_class.name), lang=lang)
+                engine_instance = engine_class(config.get_engine(engine_class.name), lang=get_ocr_language())
 
             if engine_instance.available:
                 engine_instances.append(engine_instance)
@@ -1164,7 +1370,7 @@ def run(read_from=None,
     prefix_to_use = ""
     delay_secs = config.get_general('delay_secs')
 
-    non_path_inputs = ('screencapture', 'clipboard', 'websocket', 'unixsocket')
+    non_path_inputs = ('screencapture', 'clipboard', 'websocket', 'unixsocket', 'obs')
     read_from_path = None
     read_from_readable = []
     terminated = False
@@ -1203,22 +1409,33 @@ def run(read_from=None,
         global txt_callback
         txt_callback = text_callback
 
-    if 'screencapture' in (read_from, read_from_secondary):
-        global take_screenshot
+    if any(x in ('screencapture', 'obs') for x in (read_from, read_from_secondary)):
         global screenshot_event
-        last_screenshot_time = 0
-        last_result = ([], engine_index)
+        global take_screenshot
         if screen_capture_combo != '':
             screen_capture_on_combo = True
             key_combos[screen_capture_combo] = on_screenshot_combo
         else:
             global periodic_screenshot_queue
             periodic_screenshot_queue = queue.Queue()
+
+    if 'screencapture' in (read_from, read_from_secondary):
+        last_screenshot_time = 0
+        last_result = ([], engine_index)
+
         screenshot_event = threading.Event()
-        screenshot_thread = ScreenshotThread(screen_capture_area, screen_capture_window, screen_capture_exclusions, screen_capture_only_active_windows, screen_capture_areas, screen_capture_on_combo)
+        screenshot_thread = ScreenshotThread(screen_capture_area, screen_capture_window, screen_capture_exclusions, screen_capture_areas, screen_capture_on_combo)
         screenshot_thread.start()
         filtering = TextFiltering()
         read_from_readable.append('screen capture')
+    if 'obs' in (read_from, read_from_secondary):
+        last_screenshot_time = 0
+        last_result = ([], engine_index)
+        screenshot_event = threading.Event()
+        obs_screenshot_thread = OBSScreenshotThread(gsm_ocr_config, screen_capture_on_combo, interval=screen_capture_delay_secs)
+        obs_screenshot_thread.start()
+        filtering = TextFiltering()
+        read_from_readable.append('obs')
     if 'websocket' in (read_from, read_from_secondary):
         read_from_readable.append('websocket')
     if 'unixsocket' in (read_from, read_from_secondary):
@@ -1258,7 +1475,7 @@ def run(read_from=None,
         write_to_readable = f'file {write_to}'
 
     process_queue = (any(i in ('clipboard', 'websocket', 'unixsocket') for i in (read_from, read_from_secondary)) or read_from_path or screen_capture_on_combo)
-    process_screenshots = 'screencapture' in (read_from, read_from_secondary) and not screen_capture_on_combo
+    process_screenshots = any(x in ('screencapture', 'obs') for x in (read_from, read_from_secondary)) and not screen_capture_on_combo
     if threading.current_thread() == threading.main_thread():
         signal.signal(signal.SIGINT, signal_handler)
     if (not process_screenshots) and auto_pause != 0:
@@ -1268,6 +1485,13 @@ def run(read_from=None,
     logger.opt(ansi=True).info(f"Reading from {' and '.join(read_from_readable)}, writing to {write_to_readable} using <{engine_color}>{engine_instances[engine_index].readable_name}</{engine_color}>{' (paused)' if paused else ''}")
     if screen_capture_combo:
         logger.opt(ansi=True).info(f'Manual OCR Running... Press <{engine_color}>{screen_capture_combo.replace("<", "").replace(">", "")}</{engine_color}> to run OCR')
+
+    def handle_config_changes(changes):
+        nonlocal last_result
+        if any(c in changes for c in ('ocr1', 'ocr2', 'language', 'furigana_filter_sensitivity')):
+            last_result = ([], engine_index)
+            engine_change_handler_name(get_ocr_ocr1())
+    config_check_thread.add_callback(handle_config_changes)
 
     while not terminated:
         ocr_start_time = datetime.now()
@@ -1283,7 +1507,7 @@ def run(read_from=None,
                 pass
 
         if (not img) and process_screenshots:
-            if (not paused) and screenshot_thread.screencapture_window_active and screenshot_thread.screencapture_window_visible and (time.time() - last_screenshot_time) > screen_capture_delay_secs:
+            if (not paused) and (not screenshot_thread or (screenshot_thread.screencapture_window_active and screenshot_thread.screencapture_window_visible)) and (time.time() - last_screenshot_time) > get_ocr_scan_rate():
                 screenshot_event.set()
                 img = periodic_screenshot_queue.get()
                 filter_img = True
@@ -1296,7 +1520,7 @@ def run(read_from=None,
             break
         elif img:
             if filter_img:
-                res, _ = process_and_write_results(img, write_to, last_result, filtering, notify, ocr_start_time=ocr_start_time, furigana_filter_sensitivity=furigana_filter_sensitivity)
+                res, _ = process_and_write_results(img, write_to, last_result, filtering, notify, ocr_start_time=ocr_start_time, furigana_filter_sensitivity=get_ocr_furigana_filter_sensitivity())
                 if res:
                     last_result = (res, engine_index)
             else:
@@ -1320,8 +1544,10 @@ def run(read_from=None,
         directory_watcher_thread.join()
     if unix_socket_server:
         unix_socket_server.shutdown()
-        unix_socket_server_thread.join()
+        unix_socket_server.join()
     if screenshot_thread:
         screenshot_thread.join()
     if key_combo_listener:
         key_combo_listener.stop()
+    if config_check_thread:
+        config_check_thread.join()
