@@ -165,6 +165,28 @@ def limit_image_size(img, max_size):
     return False, ''
 
 
+def get_regex(lang):
+    if lang == "ja":
+        return re.compile(r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
+    elif lang == "zh":
+        return re.compile(r'[\u4E00-\u9FFF]')
+    elif lang == "ko":
+        return re.compile(r'[\uAC00-\uD7AF]')
+    elif lang == "ar":
+        return re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+    elif lang == "ru":
+        return re.compile(r'[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u1C80-\u1C8F]')
+    elif lang == "el":
+        return re.compile(r'[\u0370-\u03FF\u1F00-\u1FFF]')
+    elif lang == "he":
+        return re.compile(r'[\u0590-\u05FF\uFB1D-\uFB4F]')
+    elif lang == "th":
+        return re.compile(r'[\u0E00-\u0E7F]')
+    else:
+        return re.compile(
+        r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
+
+
 class MangaOcr:
     name = 'mangaocr'
     readable_name = 'Manga OCR'
@@ -244,15 +266,20 @@ class GoogleLens:
     available = False
 
     def __init__(self, lang='ja'):
-        self.kana_kanji_regex = re.compile(r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
+        self.regex = get_regex(lang)
+        self.initial_lang = lang
         if 'betterproto' not in sys.modules:
             logger.warning('betterproto not available, Google Lens will not work!')
         else:
             self.available = True
             logger.info('Google Lens ready')
 
-    def __call__(self, img, furigana_filter_sensitivity=0):
+    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False):
+        lang = get_ocr_language()
         img, is_path = input_to_pil_image(img)
+        if lang != self.initial_lang:
+            self.initial_lang = lang
+            self.regex = get_regex(lang)
         if not img:
             return (False, 'Invalid image provided')
 
@@ -310,12 +337,14 @@ class GoogleLens:
         response_proto = LensOverlayServerResponse().FromString(res.content)
         response_dict = response_proto.to_dict(betterproto.Casing.SNAKE)
 
-        # with open(os.path.join(r"C:\Users\Beangate\GSM\Electron App\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
-        #     json.dump(response_dict, f, indent=4, ensure_ascii=False)
+        if os.path.exists(r"C:\Users\Beangate\GSM\Electron App\test"):
+            with open(os.path.join(r"C:\Users\Beangate\GSM\Electron App\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
+                json.dump(response_dict, f, indent=4, ensure_ascii=False)
         res = ''
         text = response_dict['objects_response']['text']
         skipped = []
         previous_line = None
+        lines = []
         if 'text_layout' in text:
             for paragraph in text['text_layout']['paragraphs']:
                 if previous_line:
@@ -331,18 +360,38 @@ class GoogleLens:
                     if vertical_space > avg_height * 2:
                         res += 'BLANK_LINE'
                 for line in paragraph['lines']:
+                    # Build a list of word boxes for this line
+                    words_info = []
+                    for word in line['words']:
+                        word_info = {
+                            "word": word['plain_text'],
+                            "x1": int(word['geometry']['bounding_box']['center_x'] * img.width - (word['geometry']['bounding_box']['width'] * img.width) / 2),
+                            "y1": int(word['geometry']['bounding_box']['center_y'] * img.height - (word['geometry']['bounding_box']['height'] * img.height) / 2),
+                            "x2": int(word['geometry']['bounding_box']['center_x'] * img.width + (word['geometry']['bounding_box']['width'] * img.width) / 2),
+                            "y2": int(word['geometry']['bounding_box']['center_y'] * img.height + (word['geometry']['bounding_box']['height'] * img.height) / 2)
+                        }
+                        words_info.append(word_info)
+
+                    line_text = ''.join([w['word'] for w in words_info])
+                    line_box = {
+                        "sentence": line_text,
+                        "words": words_info
+                    }
+
+                    # Optionally apply furigana filter
                     if furigana_filter_sensitivity:
-                        if furigana_filter_sensitivity < line['geometry']['bounding_box']['width'] * img.width and furigana_filter_sensitivity < line['geometry']['bounding_box']['height'] * img.height:
-                            for word in line['words']:
-                                res += word['plain_text'] + word['text_separator']
+                        line_width = line['geometry']['bounding_box']['width'] * img.width
+                        line_height = line['geometry']['bounding_box']['height'] * img.height
+                        if furigana_filter_sensitivity < line_width and furigana_filter_sensitivity < line_height and self.regex.search(line_text):
+                            for w in words_info:
+                                res += w['word']
                         else:
-                            skipped.append(word['plain_text'] for word in line['words'])
+                            skipped.extend([w['word'] for w in words_info])
                             continue
                     else:
-                        for word in line['words']:
-                                res += word['plain_text'] + word['text_separator']
-                        else:
-                            continue
+                        for w in words_info:
+                            res += w['word']
+                    lines.append(line_box)
                 previous_line = paragraph
                 res += '\n'
             # logger.info(
@@ -385,8 +434,11 @@ class GoogleLens:
         #                 else:
         #                     continue
         #             res += '\n'
-
-        x = (True, res)
+        
+        if return_coords:
+            x = (True, res, lines)
+        else:
+            x = (True, res)
 
         # img.close()
         return x
@@ -813,7 +865,7 @@ class OneOCR:
 
     def __init__(self, config={}, lang='ja'):
         self.initial_lang = lang
-        self.get_regex(lang)
+        self.regex = get_regex(lang)
         if sys.platform == 'win32':
             if int(platform.release()) < 10:
                 logger.warning('OneOCR is not supported on Windows older than 10!')
@@ -835,32 +887,11 @@ class OneOCR:
             except:
                 logger.warning('Error reading URL from config, OneOCR will not work!')
 
-    def get_regex(self, lang):
-        if lang == "ja":
-            self.regex = re.compile(r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
-        elif lang == "zh":
-            self.regex = re.compile(r'[\u4E00-\u9FFF]')
-        elif lang == "ko":
-            self.regex = re.compile(r'[\uAC00-\uD7AF]')
-        elif lang == "ar":
-            self.regex = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
-        elif lang == "ru":
-            self.regex = re.compile(r'[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u1C80-\u1C8F]')
-        elif lang == "el":
-            self.regex = re.compile(r'[\u0370-\u03FF\u1F00-\u1FFF]')
-        elif lang == "he":
-            self.regex = re.compile(r'[\u0590-\u05FF\uFB1D-\uFB4F]')
-        elif lang == "th":
-            self.regex = re.compile(r'[\u0E00-\u0E7F]')
-        else:
-            self.regex = re.compile(
-            r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
-
     def __call__(self, img, furigana_filter_sensitivity=0, sentence_to_check=None):
         lang = get_ocr_language()
         if lang != self.initial_lang:
             self.initial_lang = lang
-            self.get_regex(lang)
+            self.regex = get_regex(lang)
         img, is_path = input_to_pil_image(img)
         if img.width < 51 or img.height < 51:
             new_width = max(img.width, 51)
