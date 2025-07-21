@@ -887,7 +887,7 @@ class OneOCR:
             except:
                 logger.warning('Error reading URL from config, OneOCR will not work!')
 
-    def __call__(self, img, furigana_filter_sensitivity=0, sentence_to_check=None):
+    def __call__(self, img, furigana_filter_sensitivity=0, sentence_to_check=None, return_coords=False):
         lang = get_ocr_language()
         if lang != self.initial_lang:
             self.initial_lang = lang
@@ -905,19 +905,18 @@ class OneOCR:
         if sys.platform == 'win32':
             try:
                 ocr_resp = self.model.recognize_pil(img)
+                if os.path.exists(os.path.expanduser("~/GSM/temp")):
+                    with open(os.path.join(os.path.expanduser("~/GSM/temp"), 'oneocr_response.json'), 'w',
+                                encoding='utf-8') as f:
+                        json.dump(ocr_resp, f, indent=4, ensure_ascii=False)
                 # print(json.dumps(ocr_resp))
                 filtered_lines = [line for line in ocr_resp['lines'] if self.regex.search(line['text'])]
-                x_coords = [line['bounding_rect'][f'x{i}'] for line in filtered_lines for i in range(1, 5)]
-                y_coords = [line['bounding_rect'][f'y{i}'] for line in filtered_lines for i in range(1, 5)]
-                if x_coords and y_coords:
-                    crop_coords = (min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
-                # with open(os.path.join(get_temporary_directory(), 'oneocr_response.json'), 'w',
-                #           encoding='utf-8') as f:
-                #     json.dump(ocr_resp, f, indent=4, ensure_ascii=False)
+                # logger.info(filtered_lines)
                 res = ''
                 skipped = []
+                boxes = []
                 if furigana_filter_sensitivity > 0:
-                    for line in ocr_resp['lines']:
+                    for line in filtered_lines:
                         x1, x2, x3, x4 = line['bounding_rect']['x1'], line['bounding_rect']['x2'], \
                             line['bounding_rect']['x3'], line['bounding_rect']['x4']
                         y1, y2, y3, y4 = line['bounding_rect']['y1'], line['bounding_rect']['y2'], \
@@ -989,9 +988,18 @@ class OneOCR:
                     if x_coords and y_coords:
                         crop_coords = (
                             min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
+                elif return_coords:
+                    for line in filtered_lines:
+                        for word in line['words']:
+                            box = {
+                                "text": word['text'],
+                                "bounding_rect": word['bounding_rect']
+                            }
+                            boxes.append(box)
+                    res = ocr_resp['text']
                 else:
-                    x_coords = [line['bounding_rect'][f'x{i}'] for line in ocr_resp['lines'] for i in range(1, 5)]
-                    y_coords = [line['bounding_rect'][f'y{i}'] for line in ocr_resp['lines'] for i in range(1, 5)]
+                    x_coords = [line['bounding_rect'][f'x{i}'] for line in filtered_lines for i in range(1, 5)]
+                    y_coords = [line['bounding_rect'][f'y{i}'] for line in filtered_lines for i in range(1, 5)]
                     if x_coords and y_coords:
                         crop_coords = (min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
                     res = ocr_resp['text']
@@ -1010,7 +1018,10 @@ class OneOCR:
                 return (False, 'Unknown error!')
 
             res = res.json()['text']
-        x = (True, res, crop_coords)
+        if return_coords:
+            x = (True, res, boxes)
+        else:
+            x = (True, res, crop_coords)
         if is_path:
             img.close()
         return x
