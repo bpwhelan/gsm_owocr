@@ -250,7 +250,7 @@ class GoogleLens:
             self.available = True
             logger.info('Google Lens ready')
 
-    def __call__(self, img, furigana_filter_sensitivity=0):
+    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False):
         img, is_path = input_to_pil_image(img)
         if not img:
             return (False, 'Invalid image provided')
@@ -309,8 +309,10 @@ class GoogleLens:
         response_proto = LensOverlayServerResponse().FromString(res.content)
         response_dict = response_proto.to_dict(betterproto.Casing.SNAKE)
 
-        # with open(os.path.join(r"C:\Users\Beangate\GSM\Electron App\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
-        #     json.dump(response_dict, f, indent=4, ensure_ascii=False)
+        if os.path.exists(r"C:\Users\Beangate\GSM\Electron App\test"):
+            with open(os.path.join(r"C:\Users\Beangate\GSM\Electron App\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
+                json.dump(response_dict, f, indent=4, ensure_ascii=False)
+                
         res = ''
         text = response_dict['objects_response']['text']
         skipped = []
@@ -384,8 +386,11 @@ class GoogleLens:
         #                 else:
         #                     continue
         #             res += '\n'
-
-        x = (True, res)
+        
+        if return_coords:
+            x = (True, res, response_dict)
+        else:
+            x = (True, res)
 
         # img.close()
         return x
@@ -855,7 +860,7 @@ class OneOCR:
             self.regex = re.compile(
             r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
 
-    def __call__(self, img, furigana_filter_sensitivity=0):
+    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False):
         lang = get_ocr_language()
         if lang != self.initial_lang:
             self.initial_lang = lang
@@ -950,10 +955,12 @@ class OneOCR:
                 return (False, 'Unknown error!')
 
             res = res.json()['text']
-
-        x = (True, res, crop_coords)
-
-        # img.close()
+        if return_coords:
+            x = (True, res, filtered_lines)
+        else:
+            x = (True, res, crop_coords)
+        if is_path:
+            img.close()
         return x
 
     def _preprocess(self, img):

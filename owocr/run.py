@@ -44,7 +44,6 @@ import queue
 from datetime import datetime
 from PIL import Image, ImageDraw, UnidentifiedImageError
 from loguru import logger
-from pynput import keyboard
 from desktop_notifier import DesktopNotifierSync
 import psutil
 
@@ -840,18 +839,9 @@ class OBSScreenshotThread(threading.Thread):
             image_queue.put((result, True))
 
     def connect_obs(self):
-        try:
-            import obsws_python as obs
-            self.obs_client = obs.ReqClient(
-                host=get_config().obs.host,
-                port=get_config().obs.port,
-                password=get_config().obs.password,
-                timeout=10
-            )
-            logger.info("Connected to OBS WebSocket.")
-        except Exception as e:
-            logger.error(f"Failed to connect to OBS: {e}")
-            self.obs_client = None
+        import GameSentenceMiner.obs as obs
+        obs.connect_to_obs_sync()
+
 
     def run(self):
         global last_image
@@ -863,7 +853,7 @@ class OBSScreenshotThread(threading.Thread):
         def init_config(source=None, scene=None):
             obs.update_current_game()
             self.current_source = source if source else obs.get_active_source()
-            self.current_source_name = self.current_source.get('sourceName') if isinstance(self.current_source, dict) else None
+            self.current_source_name = self.current_source.get("sourceName") or None
             self.current_scene = scene if scene else obs.get_current_game()
             self.ocr_config = get_scene_ocr_config()
             self.ocr_config.scale_to_custom_size(self.width, self.height)
@@ -895,20 +885,20 @@ class OBSScreenshotThread(threading.Thread):
             if not self.ocr_config:
                 time.sleep(1)
                 continue
+            
+            if not self.current_source_name:
+                obs.update_current_game()
+                self.current_source = obs.get_active_source()
+                self.current_source_name = self.current_source.get("sourceName") or None
 
             try:
-                response = self.obs_client.get_source_screenshot(
-                    name=self.current_source_name,
-                    img_format='png',
-                    quality=75,
-                    width=self.width,
-                    height=self.height,
-                )
+                if not self.current_source_name:
+                    logger.error("No active source found in the current scene.")
+                    time.sleep(1)
+                    continue
+                img = obs.get_screenshot_PIL(source_name=self.current_source_name, width=self.width, height=self.height, img_format='jpg', compression=90)
 
-                if response.image_data:
-                    image_data = base64.b64decode(response.image_data.split(",")[1])
-                    img = Image.open(io.BytesIO(image_data)).convert("RGBA")
-                    
+                if img is not None:
                     if not img.getbbox():
                         logger.info("OBS Not Capturing anything, sleeping.")
                         time.sleep(1)
@@ -1431,8 +1421,12 @@ def run(read_from=None,
         read_from_readable.append(f'directory {read_from_path}')
 
     if len(key_combos) > 0:
-        key_combo_listener = keyboard.GlobalHotKeys(key_combos)
-        key_combo_listener.start()
+        try:
+            from pynput import keyboard
+            key_combo_listener = keyboard.GlobalHotKeys(key_combos)
+            key_combo_listener.start()
+        except ImportError:
+            pass
 
     if write_to in ('clipboard', 'websocket', 'callback'):
         write_to_readable = write_to
