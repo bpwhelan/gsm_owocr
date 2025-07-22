@@ -932,6 +932,10 @@ class OneOCR:
                         json.dump(ocr_resp, f, indent=4, ensure_ascii=False)
                 # print(json.dumps(ocr_resp))
                 filtered_lines = [line for line in ocr_resp['lines'] if self.regex.search(line['text'])]
+                x_coords = [line['bounding_rect'][f'x{i}'] for line in filtered_lines for i in range(1, 5)]
+                y_coords = [line['bounding_rect'][f'y{i}'] for line in filtered_lines for i in range(1, 5)]
+                if x_coords and y_coords:
+                    crop_coords = (min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
                 # logger.info(filtered_lines)
                 res = ''
                 skipped = []
@@ -995,10 +999,6 @@ class OneOCR:
                             boxes.append(box)
                     res = ocr_resp['text']
                 else:
-                    x_coords = [line['bounding_rect'][f'x{i}'] for line in filtered_lines for i in range(1, 5)]
-                    y_coords = [line['bounding_rect'][f'y{i}'] for line in filtered_lines for i in range(1, 5)]
-                    if x_coords and y_coords:
-                        crop_coords = (min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
                     res = ocr_resp['text']
 
             except RuntimeError as e:
