@@ -11,7 +11,6 @@ import json
 import base64
 from urllib.parse import urlparse, parse_qs
 
-import jaconv
 import numpy as np
 import rapidfuzz.fuzz
 from PIL import Image
@@ -95,6 +94,7 @@ def empty_post_process(text):
 
 
 def post_process(text, keep_blank_lines=False):
+    import jaconv
     if keep_blank_lines:
         text = '\n'.join([''.join(i.split()) for i in text.splitlines()])
     else:
