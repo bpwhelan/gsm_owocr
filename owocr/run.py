@@ -856,6 +856,9 @@ class OBSScreenshotThread(threading.Thread):
             self.current_source_name = self.current_source.get("sourceName") or None
             self.current_scene = scene if scene else obs.get_current_game()
             self.ocr_config = get_scene_ocr_config()
+            if not self.ocr_config:
+                logger.error("No OCR config found for the current scene.")
+                return
             self.ocr_config.scale_to_custom_size(self.width, self.height)
 
         # Register a scene switch callback in obsws
@@ -883,6 +886,7 @@ class OBSScreenshotThread(threading.Thread):
                 continue
 
             if not self.ocr_config:
+                logger.info("No OCR config found for the current scene. Waiting for scene switch.")
                 time.sleep(1)
                 continue
             
