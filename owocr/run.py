@@ -900,7 +900,7 @@ class OBSScreenshotThread(threading.Thread):
                     logger.error("No active source found in the current scene.")
                     time.sleep(1)
                     continue
-                img = obs.get_screenshot_PIL(source_name=self.current_source_name, width=self.width, height=self.height, img_format='jpg', compression=90)
+                img = obs.get_screenshot_PIL(source_name=self.current_source_name, width=self.width, height=self.height, img_format='png', compression=80)
 
                 if img is not None:
                     if not img.getbbox():
