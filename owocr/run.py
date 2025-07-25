@@ -1478,6 +1478,7 @@ def run(read_from=None,
                 filter_img = True
                 notify = False
                 last_screenshot_time = time.time()
+                ocr_start_time = datetime.now()
 
         if img == 0:
             on_window_closed(False)
