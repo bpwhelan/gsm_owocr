@@ -831,7 +831,7 @@ class OBSScreenshotThread(threading.Thread):
         self.width = width
         self.height = height
         self.use_periodic_queue = not screen_capture_on_combo
-
+        
     def write_result(self, result):
         if self.use_periodic_queue:
             periodic_screenshot_queue.put(result)
@@ -841,18 +841,58 @@ class OBSScreenshotThread(threading.Thread):
     def connect_obs(self):
         import GameSentenceMiner.obs as obs
         obs.connect_to_obs_sync()
-
+        
+    def scale_down_width_height(self, width, height):
+        if width == 0 or height == 0:
+            return self.width, self.height
+        aspect_ratio = width / height
+        logger.info(f"Scaling down OBS source dimensions: {width}x{height} (Aspect Ratio: {aspect_ratio})")
+        if aspect_ratio > 2.66:
+            # Ultra-wide (32:9) - use 1920x540
+            logger.info("Using ultra-wide aspect ratio scaling (32:9).")
+            return 1920, 540
+        elif aspect_ratio > 2.33:
+            # 21:9 - use 1920x800
+            logger.info("Using ultra-wide aspect ratio scaling (21:9).")
+            return 1920, 800
+        elif aspect_ratio > 1.77:
+            # 16:9 - use 1280x720
+            logger.info("Using standard aspect ratio scaling (16:9).")
+            return 1280, 720
+        elif aspect_ratio > 1.6:
+            # 16:10 - use 1280x800
+            logger.info("Using standard aspect ratio scaling (16:10).")
+            return 1280, 800
+        elif aspect_ratio > 1.33:
+            # 4:3 - use 960x720
+            logger.info("Using standard aspect ratio scaling (4:3).")
+            return 960, 720
+        elif aspect_ratio > 1.25:
+            # 5:4 - use 900x720
+            logger.info("Using standard aspect ratio scaling (5:4).")
+            return 900, 720
+        elif aspect_ratio > 1.5:
+            # 3:2 - use 1080x720
+            logger.info("Using standard aspect ratio scaling (3:2).")
+            return 1080, 720
+        else:
+            # Default/fallback - use 1280x720
+            logger.info("Using default aspect ratio scaling (1280x720).")
+            return 1280, 720
 
     def run(self):
         global last_image
-        import base64
-        import io
         from PIL import Image
         import GameSentenceMiner.obs as obs
 
         def init_config(source=None, scene=None):
             obs.update_current_game()
             self.current_source = source if source else obs.get_active_source()
+            self.source_width = self.current_source.get("sceneItemTransform").get("sourceWidth") or self.width
+            self.source_height = self.current_source.get("sceneItemTransform").get("sourceHeight") or self.height
+            if self.source_width and self.source_height:
+                self.width, self.height = self.scale_down_width_height(self.source_width, self.source_height)
+                logger.info(f"Using OBS source dimensions: {self.width}x{self.height}")
             self.current_source_name = self.current_source.get("sourceName") or None
             self.current_scene = scene if scene else obs.get_current_game()
             self.ocr_config = get_scene_ocr_config()

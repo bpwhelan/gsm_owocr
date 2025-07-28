@@ -344,7 +344,6 @@ class GoogleLens:
         text = response_dict['objects_response']['text']
         skipped = []
         previous_line = None
-        lines = []
         if 'text_layout' in text:
             for paragraph in text['text_layout']['paragraphs']:
                 if previous_line:
@@ -360,38 +359,21 @@ class GoogleLens:
                     if vertical_space > avg_height * 2:
                         res += 'BLANK_LINE'
                 for line in paragraph['lines']:
-                    # Build a list of word boxes for this line
-                    words_info = []
-                    for word in line['words']:
-                        word_info = {
-                            "word": word['plain_text'],
-                            "x1": int(word['geometry']['bounding_box']['center_x'] * img.width - (word['geometry']['bounding_box']['width'] * img.width) / 2),
-                            "y1": int(word['geometry']['bounding_box']['center_y'] * img.height - (word['geometry']['bounding_box']['height'] * img.height) / 2),
-                            "x2": int(word['geometry']['bounding_box']['center_x'] * img.width + (word['geometry']['bounding_box']['width'] * img.width) / 2),
-                            "y2": int(word['geometry']['bounding_box']['center_y'] * img.height + (word['geometry']['bounding_box']['height'] * img.height) / 2)
-                        }
-                        words_info.append(word_info)
-
-                    line_text = ''.join([w['word'] for w in words_info])
-                    line_box = {
-                        "sentence": line_text,
-                        "words": words_info
-                    }
-
-                    # Optionally apply furigana filter
                     if furigana_filter_sensitivity:
-                        line_width = line['geometry']['bounding_box']['width'] * img.width
-                        line_height = line['geometry']['bounding_box']['height'] * img.height
-                        if furigana_filter_sensitivity < line_width and furigana_filter_sensitivity < line_height and self.regex.search(line_text):
-                            for w in words_info:
-                                res += w['word']
-                        else:
-                            skipped.extend([w['word'] for w in words_info])
-                            continue
+                        for word in line['words']:
+                            if 'geometry' not in word:
+                                res += word['plain_text']
+                                continue
+                            word_width = word['geometry']['bounding_box']['width'] * img.width
+                            word_height = word['geometry']['bounding_box']['height'] * img.height
+                            if word_width > furigana_filter_sensitivity and word_height > furigana_filter_sensitivity:
+                                res += word['plain_text']
+                            else:
+                                skipped.extend([word['plain_text'] for word in line['words']])
+                                continue
                     else:
-                        for w in words_info:
-                            res += w['word']
-                    lines.append(line_box)
+                        for word in line['words']:
+                            res += word['plain_text']
                 previous_line = paragraph
                 res += '\n'
             # logger.info(
@@ -439,6 +421,9 @@ class GoogleLens:
             x = (True, res, response_dict)
         else:
             x = (True, res)
+
+        if skipped:
+            logger.info(f"Skipped {len(skipped)} chars due to furigana filter sensitivity: {furigana_filter_sensitivity}")
 
         # img.close()
         return x
