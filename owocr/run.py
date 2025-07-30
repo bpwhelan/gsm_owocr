@@ -878,7 +878,7 @@ class OBSScreenshotThread(threading.Thread):
         else:
             # Default fallback - use original resolution
             logger.info("Using default aspect ratio scaling (original resolution).")
-            return self.width, self.height
+            return width, height
 
     def run(self):
         global last_image
@@ -888,6 +888,7 @@ class OBSScreenshotThread(threading.Thread):
         def init_config(source=None, scene=None):
             obs.update_current_game()
             self.current_source = source if source else obs.get_active_source()
+            logger.info(f"Current OBS source: {self.current_source}")
             self.source_width = self.current_source.get("sceneItemTransform").get("sourceWidth") or self.width
             self.source_height = self.current_source.get("sceneItemTransform").get("sourceHeight") or self.height
             if self.source_width and self.source_height:
