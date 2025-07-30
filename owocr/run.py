@@ -876,9 +876,9 @@ class OBSScreenshotThread(threading.Thread):
             logger.info("Using standard aspect ratio scaling (3:2).")
             return 1080, 720
         else:
-            # Default/fallback - use 1280x720
-            logger.info("Using default aspect ratio scaling (1280x720).")
-            return 1280, 720
+            # Default fallback - use original resolution
+            logger.info("Using default aspect ratio scaling (original resolution).")
+            return self.width, self.height
 
     def run(self):
         global last_image

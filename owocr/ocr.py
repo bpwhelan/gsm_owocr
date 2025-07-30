@@ -17,7 +17,7 @@ from PIL import Image
 from loguru import logger
 import requests
 
-from GameSentenceMiner.util.electron_config import get_ocr_language
+from GameSentenceMiner.util.electron_config import get_ocr_language, get_furigana_filter_sensitivity
 
 # from GameSentenceMiner.util.configuration import get_temporary_directory
 
@@ -275,6 +275,7 @@ class GoogleLens:
             logger.info('Google Lens ready')
 
     def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False):
+        furigana_filter_sensitivity = get_furigana_filter_sensitivity()
         lang = get_ocr_language()
         img, is_path = input_to_pil_image(img)
         if lang != self.initial_lang:
@@ -895,6 +896,7 @@ class OneOCR:
 
     def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False):
         lang = get_ocr_language()
+        furigana_filter_sensitivity = get_furigana_filter_sensitivity()
         if lang != self.initial_lang:
             self.initial_lang = lang
             self.regex = get_regex(lang)
