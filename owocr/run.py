@@ -941,8 +941,10 @@ class OBSScreenshotThread(threading.Thread):
                     logger.error("No active source found in the current scene.")
                     time.sleep(1)
                     continue
-                img = obs.get_screenshot_PIL(source_name=self.current_source_name, width=self.width, height=self.height, img_format='png', compression=80)
-
+                # start_time = time.time()
+                img = obs.get_screenshot_PIL(source_name=self.current_source_name, width=self.width, height=self.height, img_format='jpg', compression=80)
+                # logger.info(f"OBS screenshot taken in {time.time() - start_time:.2f} seconds.")
+                
                 if img is not None:
                     if not img.getbbox():
                         logger.info("OBS Not Capturing anything, sleeping.")
