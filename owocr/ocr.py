@@ -1368,37 +1368,40 @@ class GroqOCR:
         return base64.b64encode(pil_image_to_bytes(img, png_compression=1)).decode('utf-8')
 
 # class QWENOCR:
-#     name = 'qwenvl'
+#     name = 'qwenv2'
 #     readable_name = 'Qwen2-VL'
 #     key = 'q'
 #     available = False
-#
+
 #     def __init__(self, config={}, lang='ja'):
 #         try:
 #             import torch
-#             from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
-#             self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+#             import transformers
+#             from transformers import AutoModelForImageTextToText, AutoProcessor
+#             self.model = AutoModelForImageTextToText.from_pretrained(
 #                 "Qwen/Qwen2-VL-2B-Instruct", torch_dtype="auto", device_map="auto"
 #             )
 #             self.processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", use_fast=True)
 #             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 #             print(self.device)
 #             self.available = True
-#             logger.info('Qwen2-VL ready')
+#             logger.info('Qwen2.5-VL ready')
 #         except Exception as e:
 #             logger.warning(f'Qwen2-VL not available: {e}')
-#
+
 #     def __call__(self, img, furigana_filter_sensitivity=0):
 #         if not self.available:
 #             return (False, 'Qwen2-VL is not available.')
 #         try:
-#             img = input_to_pil_image(img)
+#             img, is_path = input_to_pil_image(img)
+
+#             # img.show()
 #             conversation = [
 #                 {
 #                     "role": "user",
 #                     "content": [
 #                         {"type": "image"},
-#                         {"type": "text", "text": "Analyze the image. Extract text *only* from within dialogue boxes (speech bubbles or panels containing character dialogue). If Text appears to be vertical, read the text from top to bottom, right to left. From the extracted dialogue text, filter out any furigana. Ignore and do not include any text found outside of dialogue boxes, including character names, speaker labels, or sound effects. Return *only* the filtered dialogue text. If no text is found within dialogue boxes after applying filters, return nothing. Do not include any other output, formatting markers, or commentary."},
+#                         {"type": "text", "text": "Analyze the image. Extract text *only* from within dialogue boxes (speech bubbles or panels containing character dialogue). If Text appears to be vertical, read the text from top to bottom, right to left. From the extracted dialogue text, filter out any furigana (Small characters above the kanji). Ignore and do not include any text found outside of dialogue boxes, including character names, speaker labels, or sound effects. Return *only* the filtered dialogue text. If no text is found within dialogue boxes after applying filters, return nothing. Do not include any other output, formatting markers, or commentary."},
 #                     ],
 #                 }
 #             ]
@@ -1418,15 +1421,18 @@ class GroqOCR:
 #             return (True, output_text[0] if output_text else "")
 #         except Exception as e:
 #             return (False, f'Qwen2-VL inference failed: {e}')
+        
+#     def _preprocess(self, img):
+#         return base64.b64encode(pil_image_to_bytes(img, png_compression=6)).decode('utf-8')
 
 
 # qwenocr = QWENOCR()
-#
+
 # for i in range(10):
 #     start_time = time.time()
-#     res, text = qwenocr(Image.open('test_furigana.png'), furigana_filter_sensitivity=0)  # Example usage
+#     res, text = qwenocr(Image.open(r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\test_furigana.png"), furigana_filter_sensitivity=0)  # Example usage
 #     end_time = time.time()
-#
+
 #     print(f"Time taken: {end_time - start_time:.2f} seconds")
 #     print(text)
 # class LocalOCR:
