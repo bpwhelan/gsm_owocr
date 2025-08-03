@@ -832,7 +832,6 @@ class OBSScreenshotThread(threading.Thread):
         super().__init__(daemon=True)
         self.ocr_config = ocr_config
         self.interval = interval
-        self.obs_client = None
         self.websocket = None
         self.current_source = None
         self.current_source_name = None
@@ -930,16 +929,6 @@ class OBSScreenshotThread(threading.Thread):
         init_config()
         start = time.time()
         while not terminated:
-            if time.time() - start > 5:
-                if not self.obs_client:
-                    self.connect_obs()
-                else:
-                    try:
-                        self.obs_client.get_version()
-                    except Exception as e:
-                        logger.error(f"Lost connection to OBS: {e}")
-                        self.obs_client = None
-                        self.connect_obs()
             if not screenshot_event.wait(timeout=0.1):
                 continue
 
