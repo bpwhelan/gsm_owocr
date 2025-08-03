@@ -990,15 +990,14 @@ class OBSScreenshotThread(threading.Thread):
                 continue
 
 
-def apply_ocr_config_to_image(img, ocr_config):
+def apply_ocr_config_to_image(img, ocr_config, is_secondary=False):
     for rectangle in ocr_config.rectangles:
         if rectangle.is_excluded:
             left, top, width, height = rectangle.coordinates
             draw = ImageDraw.Draw(img)
-            draw.rectangle((left, top, left + width, top +
-                           height), fill=(0, 0, 0, 0))
+            draw.rectangle((left, top, left + width, top + height), fill=(0, 0, 0, 0))
             
-    rectangles = [r for r in ocr_config.rectangles if not r.is_excluded]
+    rectangles = [r for r in ocr_config.rectangles if not r.is_excluded and r.is_secondary == is_secondary]
     
     # Sort top to bottom
     if rectangles:
