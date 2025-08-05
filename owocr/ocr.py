@@ -17,7 +17,12 @@ from PIL import Image
 from loguru import logger
 import requests
 
-from GameSentenceMiner.util.electron_config import get_ocr_language, get_furigana_filter_sensitivity
+
+try:
+    from GameSentenceMiner.util.electron_config import get_ocr_language, get_furigana_filter_sensitivity
+    from GameSentenceMiner.util.configuration import CommonLanguages
+except ImportError:
+    pass
 
 # from GameSentenceMiner.util.configuration import get_temporary_directory
 
@@ -894,7 +899,7 @@ class OneOCR:
             self.regex = re.compile(
             r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
 
-    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False):
+    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False, multiple_crop_coords=False):
         lang = get_ocr_language()
         furigana_filter_sensitivity = get_furigana_filter_sensitivity()
         if lang != self.initial_lang:
@@ -910,6 +915,7 @@ class OneOCR:
         if not img:
             return (False, 'Invalid image provided')
         crop_coords = None
+        crop_coords_list = []
         if sys.platform == 'win32':
             try:
                 ocr_resp = self.model.recognize_pil(img)
@@ -985,6 +991,12 @@ class OneOCR:
                             }
                             boxes.append(box)
                     res = ocr_resp['text']
+                elif multiple_crop_coords:
+                    for line in filtered_lines:
+                        crop_coords_list.append(
+                            (line['bounding_rect']['x1'] - 5, line['bounding_rect']['y1'] - 5,
+                             line['bounding_rect']['x3'] + 5, line['bounding_rect']['y3'] + 5))
+                    res = ocr_resp['text']
                 else:
                     res = ocr_resp['text']
 
@@ -1004,6 +1016,8 @@ class OneOCR:
             res = res.json()['text']
         if return_coords:
             x = (True, res, filtered_lines)
+        elif multiple_crop_coords:
+            x = (True, res, crop_coords_list)
         else:
             x = (True, res, crop_coords)
         if is_path:
@@ -1367,70 +1381,208 @@ class GroqOCR:
     def _preprocess(self, img):
         return base64.b64encode(pil_image_to_bytes(img, png_compression=1)).decode('utf-8')
 
+
+# OpenAI-Compatible Endpoint OCR using LM Studio 
+class localLLMOCR:
+    name= 'local_llm_ocr'
+    readable_name = 'Local LLM OCR'
+    key = 'a'
+    available = False
+    last_ocr_time = time.time() - 5
+
+    def __init__(self, config={}, lang='ja'):
+        self.keep_llm_hot_thread = None
+        try:
+            import openai
+        except ImportError:
+            logger.warning('openai module not available, Local LLM OCR will not work!')
+            return
+        import openai, threading
+        try:
+            self.api_url = config.get('api_url', 'http://localhost:1234/v1/chat/completions')
+            self.model = config.get('model', 'qwen2.5-vl-3b-instruct')
+            self.api_key = config.get('api_key', 'lm-studio')
+            self.keep_warm = config.get('keep_warm', True)
+            self.custom_prompt = config.get('prompt', None)
+            self.available = True
+            self.client = openai.OpenAI(
+                    base_url=self.api_url.replace('/v1/chat/completions', '/v1'),
+                    api_key=self.api_key
+                )
+            logger.info('Local LLM OCR (OpenAI-compatible) ready')
+            self.keep_llm_hot_thread = threading.Thread(target=self.keep_llm_warm, daemon=True)
+            self.keep_llm_hot_thread.start()
+        except Exception as e:
+            logger.warning(f'Error initializing Local LLM OCR, Local LLM OCR will not work!')
+        
+    def keep_llm_warm(self):
+        def ocr_blank_black_image():
+            if self.last_ocr_time and (time.time() - self.last_ocr_time) < 5:
+                return
+            import numpy as np
+            from PIL import Image
+            # Create a blank black image
+            blank_image = Image.fromarray(np.zeros((100, 100, 3), dtype=np.uint8))
+            logger.info('Keeping local LLM OCR warm with a blank black image')
+            self(blank_image)
+        
+        while True:
+            ocr_blank_black_image()
+            time.sleep(5)
+
+    def __call__(self, img, furigana_filter_sensitivity=0):
+        import base64
+        try:
+            img, is_path = input_to_pil_image(img)
+            img_bytes = pil_image_to_bytes(img)
+            img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+            if self.custom_prompt and self.custom_prompt.strip() != "":
+                prompt = self.custom_prompt.strip()
+            else:
+                prompt = f"""
+                Extract all {CommonLanguages.from_code(get_ocr_language())} Text from Image. Ignore all Furigana. Do not return any commentary, just the text in the image. If there is no text in the image, return "" (Empty String).
+                """
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}},
+                        ],
+                    }
+                ],
+                max_tokens=512,
+                temperature=0.1
+            )
+            self.last_ocr_time = time.time()
+            if response.choices and response.choices[0].message.content:
+                text_output = response.choices[0].message.content.strip()
+                return (True, text_output)
+            else:
+                return (True, "")
+        except Exception as e:
+            return (False, f'Local LLM OCR request failed: {e}')
+
 # class QWENOCR:
 #     name = 'qwenv2'
 #     readable_name = 'Qwen2-VL'
 #     key = 'q'
+    
+#     # Class-level attributes for model and processor to ensure they are loaded only once
+#     model = None
+#     processor = None
+#     device = None
 #     available = False
 
-#     def __init__(self, config={}, lang='ja'):
+#     @classmethod
+#     def initialize(cls):
+#         import torch
+#         from transformers import AutoModelForImageTextToText, AutoProcessor
+#         """
+#         Class method to initialize the model. Call this once at the start of your application.
+#         This prevents reloading the model on every instantiation.
+#         """
+#         if cls.model is not None:
+#             logger.info('Qwen2-VL is already initialized.')
+#             return
+
 #         try:
-#             import torch
-#             import transformers
-#             from transformers import AutoModelForImageTextToText, AutoProcessor
-#             self.model = AutoModelForImageTextToText.from_pretrained(
-#                 "Qwen/Qwen2-VL-2B-Instruct", torch_dtype="auto", device_map="auto"
+#             if not torch.cuda.is_available():
+#                 logger.warning("CUDA not available, Qwen2-VL will run on CPU, which will be very slow.")
+#                 # You might want to prevent initialization on CPU entirely
+#                 # raise RuntimeError("CUDA is required for efficient Qwen2-VL operation.")
+            
+#             cls.device = "cuda" if torch.cuda.is_available() else "cpu"
+            
+#             cls.model = AutoModelForImageTextToText.from_pretrained(
+#                 "Qwen/Qwen2-VL-2B-Instruct", 
+#                 torch_dtype="auto", # Uses bfloat16/float16 if available, which is faster
+#                 device_map=cls.device
 #             )
-#             self.processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", use_fast=True)
-#             self.device = "cuda" if torch.cuda.is_available() else "cpu"
-#             print(self.device)
-#             self.available = True
-#             logger.info('Qwen2.5-VL ready')
-#         except Exception as e:
-#             logger.warning(f'Qwen2-VL not available: {e}')
-
-#     def __call__(self, img, furigana_filter_sensitivity=0):
-#         if not self.available:
-#             return (False, 'Qwen2-VL is not available.')
-#         try:
-#             img, is_path = input_to_pil_image(img)
-
-#             # img.show()
+#             # For PyTorch 2.0+, torch.compile can significantly speed up inference after a warm-up call
+#             # cls.model = torch.compile(cls.model) 
+            
+#             cls.processor = AutoProcessor.from_pretrained(
+#                 "Qwen/Qwen2-VL-2B-Instruct", 
+#                 use_fast=True
+#             )
+            
+#             cls.available = True
+            
 #             conversation = [
 #                 {
 #                     "role": "user",
 #                     "content": [
 #                         {"type": "image"},
-#                         {"type": "text", "text": "Analyze the image. Extract text *only* from within dialogue boxes (speech bubbles or panels containing character dialogue). If Text appears to be vertical, read the text from top to bottom, right to left. From the extracted dialogue text, filter out any furigana (Small characters above the kanji). Ignore and do not include any text found outside of dialogue boxes, including character names, speaker labels, or sound effects. Return *only* the filtered dialogue text. If no text is found within dialogue boxes after applying filters, return nothing. Do not include any other output, formatting markers, or commentary."},
+#                         {"type": "text", "text": "Extract all the text from this image, ignore all furigana."},
 #                     ],
 #                 }
 #             ]
-#             text_prompt = self.processor.apply_chat_template(conversation, add_generation_prompt=True)
+            
+#             # The same prompt is applied to all images in the batch
+#             cls.text_prompt = cls.processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+#             logger.info(f'Qwen2.5-VL ready on device: {cls.device}')
+#         except Exception as e:
+#             logger.warning(f'Qwen2-VL not available: {e}')
+#             cls.available = False
+
+#     def __init__(self, config={}, lang='ja'):
+#         # The __init__ is now very lightweight. It just checks if initialization has happened.
+#         if not self.available:
+#             raise RuntimeError("QWENOCR has not been initialized. Call QWENOCR.initialize() first.")
+
+#     def __call__(self, images):
+#         """
+#         Processes a single image or a list of images.
+#         :param images: A single image (path or PIL.Image) or a list of images.
+#         :return: A tuple (success, list_of_results)
+#         """
+#         if not self.available:
+#             return (False, ['Qwen2-VL is not available.'])
+            
+#         try:
+#             # Standardize input to be a list
+#             if not isinstance(images, list):
+#                 images = [images]
+
+#             pil_images = [input_to_pil_image(img)[0] for img in images]
+            
+#             # The processor handles batching of images and text prompts
 #             inputs = self.processor(
-#                 text=[text_prompt], images=[img], padding=True, return_tensors="pt"
-#             )
-#             inputs = inputs.to(self.device)
-#             output_ids = self.model.generate(**inputs, max_new_tokens=128)
+#                 text=[self.text_prompt] * len(pil_images), 
+#                 images=pil_images, 
+#                 padding=True, 
+#                 return_tensors="pt"
+#             ).to(self.device)
+
+#             output_ids = self.model.generate(**inputs, max_new_tokens=32)
+
+#             # The decoding logic needs to be slightly adjusted for batching
+#             input_ids_len = [len(x) for x in inputs.input_ids]
 #             generated_ids = [
-#                 output_ids[len(input_ids):]
-#                 for input_ids, output_ids in zip(inputs.input_ids, output_ids)
+#                 output_ids[i][input_ids_len[i]:] for i in range(len(input_ids_len))
 #             ]
+
 #             output_text = self.processor.batch_decode(
 #                 generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
 #             )
-#             return (True, output_text[0] if output_text else "")
+            
+#             return (True, output_text)
 #         except Exception as e:
-#             return (False, f'Qwen2-VL inference failed: {e}')
-        
-#     def _preprocess(self, img):
-#         return base64.b64encode(pil_image_to_bytes(img, png_compression=6)).decode('utf-8')
+#             return (False, [f'Qwen2-VL inference failed: {e}'])
 
 
+# QWENOCR.initialize()
 # qwenocr = QWENOCR()
+
+# localOCR = localLLMOCR(config={'api_url': 'http://localhost:1234/v1/chat/completions', 'model': 'qwen2.5-vl-3b-instruct'})
 
 # for i in range(10):
 #     start_time = time.time()
-#     res, text = qwenocr(Image.open(r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\test_furigana.png"), furigana_filter_sensitivity=0)  # Example usage
+#     res, text = localOCR(Image.open(r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\test_furigana.png"))  # Example usage
 #     end_time = time.time()
 
 #     print(f"Time taken: {end_time - start_time:.2f} seconds")

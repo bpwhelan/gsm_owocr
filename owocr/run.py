@@ -800,8 +800,11 @@ class ScreenshotThread(threading.Thread):
 
 def set_last_image(image):
     global last_image
-    if image == last_image:
-        return
+    try:
+        if image == last_image:
+            return
+    except Exception:
+        pass
     try:
         if last_image is not None and hasattr(last_image, "close"):
             last_image.close()
@@ -890,43 +893,44 @@ class OBSScreenshotThread(threading.Thread):
             logger.info(
                 "Using default aspect ratio scaling (original resolution).")
             return width, height
+        
+    def init_config(self, source=None, scene=None):
+        import GameSentenceMiner.obs as obs
+        obs.update_current_game()
+        self.current_source = source if source else obs.get_active_source()
+        logger.info(f"Current OBS source: {self.current_source}")
+        self.source_width = self.current_source.get(
+            "sceneItemTransform").get("sourceWidth") or self.width
+        self.source_height = self.current_source.get(
+            "sceneItemTransform").get("sourceHeight") or self.height
+        if self.source_width and self.source_height:
+            self.width, self.height = self.scale_down_width_height(
+                self.source_width, self.source_height)
+            logger.info(
+                f"Using OBS source dimensions: {self.width}x{self.height}")
+        self.current_source_name = self.current_source.get(
+            "sourceName") or None
+        self.current_scene = scene if scene else obs.get_current_game()
+        self.ocr_config = get_scene_ocr_config()
+        if not self.ocr_config:
+            logger.error("No OCR config found for the current scene.")
+            return
+        self.ocr_config.scale_to_custom_size(self.width, self.height)
 
     def run(self):
         global last_image
         from PIL import Image
         import GameSentenceMiner.obs as obs
 
-        def init_config(source=None, scene=None):
-            obs.update_current_game()
-            self.current_source = source if source else obs.get_active_source()
-            logger.info(f"Current OBS source: {self.current_source}")
-            self.source_width = self.current_source.get(
-                "sceneItemTransform").get("sourceWidth") or self.width
-            self.source_height = self.current_source.get(
-                "sceneItemTransform").get("sourceHeight") or self.height
-            if self.source_width and self.source_height:
-                self.width, self.height = self.scale_down_width_height(
-                    self.source_width, self.source_height)
-                logger.info(
-                    f"Using OBS source dimensions: {self.width}x{self.height}")
-            self.current_source_name = self.current_source.get(
-                "sourceName") or None
-            self.current_scene = scene if scene else obs.get_current_game()
-            self.ocr_config = get_scene_ocr_config()
-            if not self.ocr_config:
-                logger.error("No OCR config found for the current scene.")
-                return
-            self.ocr_config.scale_to_custom_size(self.width, self.height)
-
         # Register a scene switch callback in obsws
         def on_scene_switch(scene):
             logger.info(f"Scene switched to: {scene}. Loading new OCR config.")
-            init_config(scene=scene)
+            self.init_config(scene=scene)
 
         asyncio.run(obs.register_scene_change_callback(on_scene_switch))
 
         self.connect_obs()
-        init_config()
+        self.init_config()
         start = time.time()
         while not terminated:
             if not screenshot_event.wait(timeout=0.1):
@@ -1396,6 +1400,7 @@ def run(read_from=None,
     global notifier
     global websocket_server_thread
     global screenshot_thread
+    global obs_screenshot_thread
     global image_queue
     global ocr_1
     global ocr_2
@@ -1555,7 +1560,15 @@ def run(read_from=None,
         if any(c in changes for c in ('ocr1', 'ocr2', 'language', 'furigana_filter_sensitivity')):
             last_result = ([], engine_index)
             engine_change_handler_name(get_ocr_ocr1())
-    config_check_thread.add_callback(handle_config_changes)
+            
+    def handle_area_config_changes(changes):
+        if screenshot_thread:
+            screenshot_thread.ocr_config = get_scene_ocr_config()
+        if obs_screenshot_thread:
+            obs_screenshot_thread.init_config()
+                
+    config_check_thread.add_config_callback(handle_config_changes)
+    config_check_thread.add_area_callback(handle_area_config_changes)
 
     while not terminated:
         ocr_start_time = datetime.now()
