@@ -1410,9 +1410,12 @@ class localLLMOCR:
                     base_url=self.api_url.replace('/v1/chat/completions', '/v1'),
                     api_key=self.api_key
                 )
-            logger.info('Local LLM OCR (OpenAI-compatible) ready')
-            self.keep_llm_hot_thread = threading.Thread(target=self.keep_llm_warm, daemon=True)
-            self.keep_llm_hot_thread.start()
+            if self.client.models.retrieve(self.model):
+                self.model = self.model
+            logger.info(f'Local LLM OCR (OpenAI-compatible) ready with model {self.model}')
+            if self.keep_warm:
+                self.keep_llm_hot_thread = threading.Thread(target=self.keep_llm_warm, daemon=True)
+                self.keep_llm_hot_thread.start()
         except Exception as e:
             logger.warning(f'Error initializing Local LLM OCR, Local LLM OCR will not work!')
         
@@ -1441,7 +1444,7 @@ class localLLMOCR:
                 prompt = self.custom_prompt.strip()
             else:
                 prompt = f"""
-                Extract all {CommonLanguages.from_code(get_ocr_language())} Text from Image. Ignore all Furigana. Do not return any commentary, just the text in the image. If there is no text in the image, return "" (Empty String).
+                Extract all {CommonLanguages.from_code(get_ocr_language()).name} Text from Image. Ignore all Furigana. Do not return any commentary, just the text in the image. If there is no text in the image, return "" (Empty String).
                 """
 
             response = self.client.chat.completions.create(
@@ -1455,7 +1458,7 @@ class localLLMOCR:
                         ],
                     }
                 ],
-                max_tokens=512,
+                max_tokens=4096,
                 temperature=0.1
             )
             self.last_ocr_time = time.time()
