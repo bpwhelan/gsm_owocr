@@ -368,20 +368,21 @@ class GoogleLens:
                     if furigana_filter_sensitivity:
                         for word in line['words']:
                             if 'geometry' not in word:
-                                res += word['plain_text']
+                                res += word['plain_text'] + word['text_separator']
                                 continue
                             word_width = word['geometry']['bounding_box']['width'] * img.width
                             word_height = word['geometry']['bounding_box']['height'] * img.height
                             if word_width > furigana_filter_sensitivity and word_height > furigana_filter_sensitivity:
-                                res += word['plain_text']
+                                res += word['plain_text'] + word['text_separator']
                             else:
                                 skipped.extend([word['plain_text'] for word in line['words']])
                                 continue
                     else:
                         for word in line['words']:
-                            res += word['plain_text']
+                            res += word['plain_text'] + word['text_separator']
+                            
                 previous_line = paragraph
-                res += '\n'
+            res += '\n'
             # logger.info(
             #     f"Skipped {len(skipped)} chars due to furigana filter sensitivity: {furigana_filter_sensitivity}")
             # widths = []
