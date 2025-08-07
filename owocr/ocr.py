@@ -900,7 +900,7 @@ class OneOCR:
             self.regex = re.compile(
             r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
 
-    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False, multiple_crop_coords=False):
+    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False, multiple_crop_coords=False, return_one_box=True):
         lang = get_ocr_language()
         furigana_filter_sensitivity = get_furigana_filter_sensitivity()
         if lang != self.initial_lang:
@@ -983,23 +983,15 @@ class OneOCR:
                     #         else:
                     #             continue
                     #     res += '\n'
-                elif return_coords:
-                    for line in filtered_lines:
-                        for word in line['words']:
-                            box = {
-                                "text": word['text'],
-                                "bounding_rect": word['bounding_rect']
-                            }
-                            boxes.append(box)
+                else:
                     res = ocr_resp['text']
-                elif multiple_crop_coords:
+                    
+                if multiple_crop_coords:
+                    logger.info(f"Getting multiple crop coords for {len(filtered_lines)} lines")
                     for line in filtered_lines:
                         crop_coords_list.append(
                             (line['bounding_rect']['x1'] - 5, line['bounding_rect']['y1'] - 5,
                              line['bounding_rect']['x3'] + 5, line['bounding_rect']['y3'] + 5))
-                    res = ocr_resp['text']
-                else:
-                    res = ocr_resp['text']
 
             except RuntimeError as e:
                 return (False, e)
@@ -1015,12 +1007,14 @@ class OneOCR:
                 return (False, 'Unknown error!')
 
             res = res.json()['text']
+
+        x = [True, res]
         if return_coords:
-            x = (True, res, filtered_lines)
-        elif multiple_crop_coords:
-            x = (True, res, crop_coords_list)
-        else:
-            x = (True, res, crop_coords)
+            x.append(filtered_lines)
+        if multiple_crop_coords:
+            x.append(crop_coords_list)
+        if return_one_box:
+            x.append(crop_coords)
         if is_path:
             img.close()
         return x
