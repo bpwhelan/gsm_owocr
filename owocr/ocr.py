@@ -866,6 +866,8 @@ class OneOCR:
                 logger.warning('OneOCR is not supported on Windows older than 10!')
             elif 'oneocr' not in sys.modules:
                 logger.warning('oneocr not available, OneOCR will not work!')
+            elif not os.path.exists(os.path.expanduser('~/.config/oneocr/oneocr.dll')):
+                logger.warning('OneOCR DLLs not found, please install OwOCR Dependencies via OCR Tab in GSM.')
             else:
                 try:
                     self.model = oneocr.OcrEngine()
