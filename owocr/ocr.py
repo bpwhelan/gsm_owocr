@@ -280,7 +280,10 @@ class GoogleLens:
             logger.info('Google Lens ready')
 
     def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False):
-        furigana_filter_sensitivity = get_furigana_filter_sensitivity()
+        if furigana_filter_sensitivity != None:
+            furigana_filter_sensitivity = get_furigana_filter_sensitivity()
+        else:
+            furigana_filter_sensitivity = 0
         lang = get_ocr_language()
         img, is_path = input_to_pil_image(img)
         if lang != self.initial_lang:
@@ -902,7 +905,10 @@ class OneOCR:
 
     def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False, multiple_crop_coords=False, return_one_box=True):
         lang = get_ocr_language()
-        furigana_filter_sensitivity = get_furigana_filter_sensitivity()
+        if furigana_filter_sensitivity != None:
+            furigana_filter_sensitivity = get_furigana_filter_sensitivity()
+        else:
+            furigana_filter_sensitivity = 0
         if lang != self.initial_lang:
             self.initial_lang = lang
             self.regex = get_regex(lang)
