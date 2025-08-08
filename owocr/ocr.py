@@ -71,7 +71,12 @@ except ImportError:
     pass
 
 try:
-    import oneocr
+    try:
+        if os.path.exists(os.path.expanduser('~/.config/oneocr/oneocr.dll')):
+            import oneocr
+    except Exception as e:
+        oneocr = None
+        logger.warning(f'Failed to import OneOCR: {e}', exc_info=True)
 except ImportError:
     pass
 
@@ -870,6 +875,7 @@ class OneOCR:
                 logger.warning('OneOCR DLLs not found, please install OwOCR Dependencies via OCR Tab in GSM.')
             else:
                 try:
+                    logger.info(f'Loading OneOCR model')
                     self.model = oneocr.OcrEngine()
                 except RuntimeError as e:
                     logger.warning(e + ', OneOCR will not work!')
