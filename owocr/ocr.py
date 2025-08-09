@@ -439,6 +439,7 @@ class GoogleLens:
 
         if skipped:
             logger.info(f"Skipped {len(skipped)} chars due to furigana filter sensitivity: {furigana_filter_sensitivity}")
+            logger.debug(f"Skipped chars: {''.join(skipped)}")
 
         # img.close()
         return x
