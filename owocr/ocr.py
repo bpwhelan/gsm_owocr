@@ -276,8 +276,10 @@ class GoogleLens:
     available = False
 
     def __init__(self, lang='ja'):
+        import regex
         self.regex = get_regex(lang)
         self.initial_lang = lang
+        self.punctuation_regex = regex.compile(r'[\p{P}\p{S}]')
         if 'betterproto' not in sys.modules:
             logger.warning('betterproto not available, Google Lens will not work!')
         else:
@@ -375,6 +377,8 @@ class GoogleLens:
                 for line in paragraph['lines']:
                     if furigana_filter_sensitivity:
                         for word in line['words']:
+                            if not self.punctuation_regex.findall(word):
+                                continue
                             if 'geometry' not in word:
                                 res += word['plain_text'] + word['text_separator']
                                 continue
@@ -383,7 +387,7 @@ class GoogleLens:
                             if word_width > furigana_filter_sensitivity and word_height > furigana_filter_sensitivity:
                                 res += word['plain_text'] + word['text_separator']
                             else:
-                                skipped.extend([word['plain_text'] for word in line['words']])
+                                skipped.extend(word['plain_text'])
                                 continue
                     else:
                         for word in line['words']:
@@ -935,10 +939,10 @@ class OneOCR:
         if sys.platform == 'win32':
             try:
                 ocr_resp = self.model.recognize_pil(img)
-                if os.path.exists(os.path.expanduser("~/GSM/temp")):
-                    with open(os.path.join(os.path.expanduser("~/GSM/temp"), 'oneocr_response.json'), 'w',
-                                encoding='utf-8') as f:
-                        json.dump(ocr_resp, f, indent=4, ensure_ascii=False)
+                # if os.path.exists(os.path.expanduser("~/GSM/temp")):
+                #     with open(os.path.join(os.path.expanduser("~/GSM/temp"), 'oneocr_response.json'), 'w',
+                #                 encoding='utf-8') as f:
+                #         json.dump(ocr_resp, f, indent=4, ensure_ascii=False)
                 # print(json.dumps(ocr_resp))
                 filtered_lines = [line for line in ocr_resp['lines'] if self.regex.search(line['text'])]
                 x_coords = [line['bounding_rect'][f'x{i}'] for line in filtered_lines for i in range(1, 5)]

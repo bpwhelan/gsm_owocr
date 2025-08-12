@@ -41,7 +41,7 @@ import websockets
 import socketserver
 import queue
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, UnidentifiedImageError
 from loguru import logger
 from desktop_notifier import DesktopNotifierSync
@@ -798,24 +798,50 @@ class ScreenshotThread(threading.Thread):
             self.windows_window_tracker_instance.join()
 
 
+import cv2
+import numpy as np
+    
+def apply_adaptive_threshold_filter(img):
+    # Convert to cv2
+    img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    inverted = cv2.bitwise_not(gray)
+    blur = cv2.GaussianBlur(inverted, (3, 3), 0)
+    thresh = cv2.adaptiveThreshold(
+        blur, 255, 
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 
+        11, 2
+    )
+    result = cv2.bitwise_not(thresh)
+    cv2.imwrite('white_text_isolated.png', result)
+
+    # Convert cv2 to PIL
+    return Image.fromarray(result)
+
+
 def set_last_image(image):
     global last_image
+    if image is None:
+        last_image = None
     try:
         if image == last_image:
             return
     except Exception:
-        pass
+        last_image = None
+        return
     try:
         if last_image is not None and hasattr(last_image, "close"):
             last_image.close()
     except Exception:
         pass
-    last_image = image
+    # last_image = image
+    last_image = apply_adaptive_threshold_filter(image)
 
 
 def are_images_identical(img1, img2):
     if None in (img1, img2):
-        return img1 == img2
+        return False
 
     try:
         img1 = np.array(img1)
@@ -827,6 +853,128 @@ def are_images_identical(img1, img2):
         return False
 
     return (img1.shape == img2.shape) and np.array_equal(img1, img2)
+
+
+import cv2
+import numpy as np
+from skimage.metrics import structural_similarity as ssim
+from typing import Union
+
+ImageType = Union[np.ndarray, Image.Image]
+
+def _prepare_image(image: ImageType) -> np.ndarray:
+    """
+    Standardizes an image (PIL or NumPy) into an OpenCV-compatible NumPy array (BGR).
+    """
+    # If the image is a PIL Image, convert it to a NumPy array
+    if isinstance(image, Image.Image):
+        # Convert PIL Image (which is RGB) to a NumPy array, then convert RGB to BGR for OpenCV
+        prepared_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    # If it's already a NumPy array, assume it's in a compatible format (like BGR)
+    elif isinstance(image, np.ndarray):
+        prepared_image = image
+    else:
+        raise TypeError(f"Unsupported image type: {type(image)}. Must be a PIL Image or NumPy array.")
+
+    return prepared_image
+
+i = 1
+
+def calculate_ssim_score(imageA: ImageType, imageB: ImageType) -> float:
+    global i
+    """
+    Calculates the structural similarity index (SSIM) between two images.
+
+    Args:
+        imageA: The first image as a NumPy array.
+        imageB: The second image as a NumPy array.
+
+    Returns:
+        The SSIM score between the two images (between -1 and 1).
+    """
+    
+    if isinstance(imageA, Image.Image):
+        imageA = apply_adaptive_threshold_filter(imageA)
+        
+    # Save Images to temp for debugging on a random 1/20 chance
+    # if np.random.rand() < 0.05:
+    # if i < 600:
+    #     # Save as image_000
+    #     imageA.save(os.path.join(get_temporary_directory(), f'frame_{i:03d}.png'), 'PNG')
+    #     i += 1
+        # imageB.save(os.path.join(get_temporary_directory(), f'ssim_imageB_{i:03d}.png'), 'PNG')
+
+    imageA = _prepare_image(imageA)
+    imageB = _prepare_image(imageB)
+
+    # Images must have the same dimensions
+    if imageA.shape != imageB.shape:
+        raise ValueError("Input images must have the same dimensions.")
+
+    # Convert images to grayscale for a more robust SSIM comparison
+    # This is less sensitive to minor color changes and lighting.
+    # grayA = cv2.cvtColor(imageA, cv2.COLOR_BGR2GRAY)
+    # grayB = cv2.cvtColor(imageB, cv2.COLOR_BGR2GRAY)
+
+    # Calculate the SSIM. The `score` is the main value.
+    # The `win_size` parameter must be an odd number and less than the image dimensions.
+    # We choose a value that is likely to be safe for a variety of image sizes.
+    win_size = min(3, imageA.shape[0] // 2, imageA.shape[1] // 2)
+    if win_size % 2 == 0:
+        win_size -= 1 # ensure it's odd
+
+    score, _ = ssim(imageA, imageB, full=True, win_size=win_size)
+
+    return score
+
+
+
+def are_images_similar(imageA: Image.Image, imageB: Image.Image, threshold: float = 0.98) -> bool:
+    """
+    Compares two images and returns True if their similarity score is above a threshold.
+
+    Args:
+        imageA: The first image as a NumPy array.
+        imageB: The second image as a NumPy array.
+        threshold: The minimum SSIM score to be considered "similar".
+                   Defaults to 0.98 (very high similarity). Your original `90` would
+                   be equivalent to a threshold of `0.90` here.
+
+    Returns:
+        True if the images are similar, False otherwise.
+    """
+    if None in (imageA, imageB):
+        logger.info("One of the images is None, cannot compare.")
+        return False
+    try:
+        score = calculate_ssim_score(imageA, imageB)
+    except Exception as e:
+        logger.info(e)
+        return False
+    return score > threshold
+
+
+def quick_text_detection(pil_image, threshold_ratio=0.01):
+    """
+    Quick check if image likely contains text using edge detection.
+    
+    Args:
+        pil_image (PIL.Image): Input image
+        threshold_ratio (float): Minimum ratio of edge pixels to consider text present
+    
+    Returns:
+        bool: True if text is likely present
+    """
+    # Convert to grayscale
+    gray = np.array(pil_image.convert('L'))
+    
+    # Apply Canny edge detection
+    edges = cv2.Canny(gray, 50, 150)
+    
+    # Calculate ratio of edge pixels
+    edge_ratio = np.sum(edges > 0) / edges.size
+    
+    return edge_ratio > threshold_ratio
 
 
 # Use OBS for Screenshot Source (i.e. Linux)
@@ -848,6 +996,7 @@ class OBSScreenshotThread(threading.Thread):
             periodic_screenshot_queue.put(result)
         else:
             image_queue.put((result, True))
+        screenshot_event.clear()
 
     def connect_obs(self):
         import GameSentenceMiner.obs as obs
@@ -911,7 +1060,7 @@ class OBSScreenshotThread(threading.Thread):
         self.current_source_name = self.current_source.get(
             "sourceName") or None
         self.current_scene = scene if scene else obs.get_current_game()
-        self.ocr_config = get_scene_ocr_config()
+        self.ocr_config = get_scene_ocr_config(refresh=True)
         if not self.ocr_config:
             logger.error("No OCR config found for the current scene.")
             return
@@ -931,7 +1080,6 @@ class OBSScreenshotThread(threading.Thread):
 
         self.connect_obs()
         self.init_config()
-        start = time.time()
         while not terminated:
             if not screenshot_event.wait(timeout=0.1):
                 continue
@@ -952,33 +1100,21 @@ class OBSScreenshotThread(threading.Thread):
                 if not self.current_source_name:
                     logger.error(
                         "No active source found in the current scene.")
-                    time.sleep(1)
+                    self.write_result(1)
                     continue
-                # start_time = time.time()
                 img = obs.get_screenshot_PIL(source_name=self.current_source_name,
                                              width=self.width, height=self.height, img_format='jpg', compression=80)
-                # logger.info(f"OBS screenshot taken in {time.time() - start_time:.2f} seconds.")
                 
                 img = apply_ocr_config_to_image(img, self.ocr_config)
 
                 if img is not None:
-                    if not img.getbbox():
-                        logger.info("OBS Not Capturing anything, sleeping.")
-                        time.sleep(1)
-                        continue
-
-                    if last_image and are_images_identical(img, last_image):
-                        logger.debug(
-                            "Captured screenshot is identical to the last one, sleeping.")
-                        time.sleep(max(.5, get_ocr_scan_rate()))
-                    else:
-                        self.write_result(img)
-                        screenshot_event.clear()
+                    self.write_result(img)
                 else:
                     logger.error("Failed to get screenshot data from OBS.")
 
             except Exception as e:
-                logger.error(
+                print(e)
+                logger.info(
                     f"An unexpected error occurred during OBS Capture : {e}", exc_info=True)
                 continue
 
@@ -1569,7 +1705,9 @@ def run(read_from=None,
                 
     config_check_thread.add_config_callback(handle_config_changes)
     config_check_thread.add_area_callback(handle_area_config_changes)
-
+    previous_text = "Placeholder"
+    sleep_time_to_add = 0
+    last_result_time = time.time()
     while not terminated:
         ocr_start_time = datetime.now()
         start_time = time.time()
@@ -1582,15 +1720,22 @@ def run(read_from=None,
                 notify = True
             except queue.Empty:
                 pass
-
+            
+        if get_ocr_scan_rate() < .5:
+            adjusted_scan_rate = min(get_ocr_scan_rate() + sleep_time_to_add, .5)
+        else:
+            adjusted_scan_rate = get_ocr_scan_rate()
+            
         if (not img) and process_screenshots:
-            if (not paused) and (not screenshot_thread or (screenshot_thread.screencapture_window_active and screenshot_thread.screencapture_window_visible)) and (time.time() - last_screenshot_time) > get_ocr_scan_rate():
+            if (not paused) and (not screenshot_thread or (screenshot_thread.screencapture_window_active and screenshot_thread.screencapture_window_visible)) and (time.time() - last_screenshot_time) > adjusted_scan_rate:
                 screenshot_event.set()
                 img = periodic_screenshot_queue.get()
                 filter_img = True
                 notify = False
                 last_screenshot_time = time.time()
                 ocr_start_time = datetime.now()
+                if adjusted_scan_rate > get_ocr_scan_rate():
+                    ocr_start_time = ocr_start_time - timedelta(seconds=adjusted_scan_rate - get_ocr_scan_rate())
 
         if img == 0:
             on_window_closed(False)
@@ -1598,10 +1743,51 @@ def run(read_from=None,
             break
         elif img:
             if filter_img:
-                res, _ = process_and_write_results(img, write_to, last_result, filtering, notify,
+                ocr_config = get_scene_ocr_config()
+                # Check if the image is completely empty (all white or all black)
+                try:
+                    extrema = img.getextrema()
+                    # For RGB or RGBA images, extrema is a tuple of (min, max) for each channel
+                    if isinstance(extrema[0], tuple):
+                        is_empty = all(e[0] == e[1] for e in extrema)
+                    else:
+                        is_empty = extrema[0] == extrema[1]
+                    if is_empty:
+                        logger.info("Image is totally empty (all pixels the same), sleeping.")
+                        sleep_time_to_add = .5
+                        continue
+                except Exception as e:
+                    logger.debug(f"Could not determine if image is empty: {e}")
+                    
+                # Compare images, but only if it's one box, multiple boxes skews results way too much and produces false positives
+                if ocr_config and len(ocr_config.rectangles) < 2:
+                    if are_images_similar(img, last_image):
+                        logger.info("Captured screenshot is similar to the last one, sleeping.")
+                        if time.time() - last_result_time > 10:
+                            sleep_time_to_add += .005
+                        continue
+                else:
+                    if are_images_identical(img, last_image):
+                        logger.info("Captured screenshot is identical to the last one, sleeping.")
+                        if time.time() - last_result_time > 10:
+                            sleep_time_to_add += .005
+                        continue
+
+                res, text = process_and_write_results(img, write_to, last_result, filtering, notify,
                                                    ocr_start_time=ocr_start_time, furigana_filter_sensitivity=get_ocr_furigana_filter_sensitivity())
+                if not text and not previous_text and time.time() - last_result_time > 10:
+                    sleep_time_to_add += .005
+                    logger.info(f"No text detected again, sleeping.")
+                else:
+                    sleep_time_to_add = 0
+                    
+                # If image was stabilized, and now there is no text, reset sleep time
+                if not previous_text and not res:
+                    sleep_time_to_add = 0
+                previous_text = text
                 if res:
                     last_result = (res, engine_index)
+                    last_result_time = time.time()
             else:
                 process_and_write_results(
                     img, write_to, None, notify=notify, ocr_start_time=ocr_start_time, engine=ocr2)
