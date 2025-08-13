@@ -1424,10 +1424,10 @@ class localLLMOCR:
             self.keep_warm = config.get('keep_warm', True)
             self.custom_prompt = config.get('prompt', None)
             self.available = True
-            if any(x in self.api_url for x in ['localhost', '127.0.0.1']):
-                if not self.check_connection(self.api_url):
-                    logger.warning('Local LLM OCR API is not reachable')
-                    return
+            # if any(x in self.api_url for x in ['localhost', '127.0.0.1']):
+            #     if not self.check_connection(self.api_url):
+            #         logger.warning('Local LLM OCR API is not reachable')
+            #         return
             self.client = openai.OpenAI(
                 base_url=self.api_url.replace('/v1/chat/completions', '/v1'),
                 api_key=self.api_key
@@ -1442,7 +1442,6 @@ class localLLMOCR:
             logger.warning(f'Error initializing Local LLM OCR, Local LLM OCR will not work!')
             
     def check_connection(self, url, port=None):
-        # simple connectivity check with mega low timeout
         import http.client
         conn = http.client.HTTPConnection(url, port or 1234, timeout=0.1)
         try:
