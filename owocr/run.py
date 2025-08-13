@@ -802,7 +802,6 @@ import cv2
 import numpy as np
     
 def apply_adaptive_threshold_filter(img):
-    # Convert to cv2
     img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     inverted = cv2.bitwise_not(gray)
@@ -814,9 +813,7 @@ def apply_adaptive_threshold_filter(img):
         11, 2
     )
     result = cv2.bitwise_not(thresh)
-    cv2.imwrite('white_text_isolated.png', result)
 
-    # Convert cv2 to PIL
     return Image.fromarray(result)
 
 
