@@ -832,8 +832,8 @@ def set_last_image(image):
             last_image.close()
     except Exception:
         pass
-    # last_image = image
-    last_image = apply_adaptive_threshold_filter(image)
+    last_image = image
+    # last_image = apply_adaptive_threshold_filter(image)
 
 
 def are_images_identical(img1, img2):
@@ -1113,6 +1113,7 @@ class OBSScreenshotThread(threading.Thread):
                 print(e)
                 logger.info(
                     f"An unexpected error occurred during OBS Capture : {e}", exc_info=True)
+                time.sleep(.5)
                 continue
 
 
@@ -1757,18 +1758,18 @@ def run(read_from=None,
                     logger.debug(f"Could not determine if image is empty: {e}")
                     
                 # Compare images, but only if it's one box, multiple boxes skews results way too much and produces false positives
-                if ocr_config and len(ocr_config.rectangles) < 2:
-                    if are_images_similar(img, last_image):
-                        logger.info("Captured screenshot is similar to the last one, sleeping.")
-                        if time.time() - last_result_time > 10:
-                            sleep_time_to_add += .005
-                        continue
-                else:
-                    if are_images_identical(img, last_image):
-                        logger.info("Captured screenshot is identical to the last one, sleeping.")
-                        if time.time() - last_result_time > 10:
-                            sleep_time_to_add += .005
-                        continue
+                # if ocr_config and len(ocr_config.rectangles) < 2:
+                #     if are_images_similar(img, last_image):
+                #         logger.info("Captured screenshot is similar to the last one, sleeping.")
+                #         if time.time() - last_result_time > 10:
+                #             sleep_time_to_add += .005
+                #         continue
+                # else:
+                if are_images_identical(img, last_image):
+                    logger.info("Captured screenshot is identical to the last one, sleeping.")
+                    if time.time() - last_result_time > 10:
+                        sleep_time_to_add += .005
+                    continue
 
                 res, text = process_and_write_results(img, write_to, last_result, filtering, notify,
                                                    ocr_start_time=ocr_start_time, furigana_filter_sensitivity=get_ocr_furigana_filter_sensitivity())
