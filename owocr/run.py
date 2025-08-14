@@ -59,6 +59,7 @@ from GameSentenceMiner.util.configuration import get_temporary_directory, get_co
 
 config = None
 last_image = None
+last_image_np = None
 
 
 class ClipboardThread(threading.Thread):
@@ -818,9 +819,10 @@ def apply_adaptive_threshold_filter(img):
 
 
 def set_last_image(image):
-    global last_image
+    global last_image, last_image_np
     if image is None:
         last_image = None
+        last_image_np = None
     try:
         if image == last_image:
             return
@@ -833,23 +835,34 @@ def set_last_image(image):
     except Exception:
         pass
     last_image = image
+    last_image_np = np.array(last_image)
     # last_image = apply_adaptive_threshold_filter(image)
 
 
-def are_images_identical(img1, img2):
-    if None in (img1, img2):
+def are_images_identical(img1, img2, img2_np=None):
+    """
+    Compares two images for pixel-wise identity.
+    Optionally, pass a cached np.array for img2 as img2_np to avoid repeated conversion.
+
+    Args:
+        img1: PIL.Image or np.ndarray
+        img2: PIL.Image or np.ndarray
+        img2_np: Optional cached np.ndarray for img2
+
+    Returns:
+        bool: True if images are identical, False otherwise.
+    """
+    if any(v is None for v in (img1, img2, img2_np)):
         return False
 
     try:
-        img1 = np.array(img1)
-        img2 = np.array(img2)
+        img1_np = np.array(img1)
+        img2_np = img2_np if img2_np is not None else np.array(img2)
     except Exception:
-        logger.warning(
-            "Failed to convert images to numpy arrays for comparison.")
-        # If conversion to numpy array fails, consider them not identical
+        logger.warning("Failed to convert images to numpy arrays for comparison.")
         return False
 
-    return (img1.shape == img2.shape) and np.array_equal(img1, img2)
+    return (img1_np.shape == img2_np.shape) and np.array_equal(img1_np, img2_np)
 
 
 import cv2
@@ -997,7 +1010,7 @@ class OBSScreenshotThread(threading.Thread):
 
     def connect_obs(self):
         import GameSentenceMiner.obs as obs
-        obs.connect_to_obs_sync()
+        obs.connect_to_obs_sync(check_output=False)
 
     def scale_down_width_height(self, width, height):
         if width == 0 or height == 0:
@@ -1765,7 +1778,7 @@ def run(read_from=None,
                 #             sleep_time_to_add += .005
                 #         continue
                 # else:
-                if are_images_identical(img, last_image):
+                if are_images_identical(img, last_image, last_image_np):
                     logger.info("Captured screenshot is identical to the last one, sleeping.")
                     if time.time() - last_result_time > 10:
                         sleep_time_to_add += .005

@@ -15,6 +15,7 @@ import numpy as np
 import rapidfuzz.fuzz
 from PIL import Image
 from loguru import logger
+import regex
 import requests
 
 
@@ -377,7 +378,8 @@ class GoogleLens:
                 for line in paragraph['lines']:
                     if furigana_filter_sensitivity:
                         for word in line['words']:
-                            if not self.punctuation_regex.findall(word):
+                            if self.punctuation_regex.findall(word['plain_text']):
+                                res += word['plain_text'] + word['text_separator']
                                 continue
                             if 'geometry' not in word:
                                 res += word['plain_text'] + word['text_separator']
@@ -869,8 +871,10 @@ class OneOCR:
     available = False
 
     def __init__(self, config={}, lang='ja'):
+        import regex
         self.initial_lang = lang
         self.regex = get_regex(lang)
+        self.punctuation_regex = regex.compile(r'[\p{P}\p{S}]')
         if sys.platform == 'win32':
             if int(platform.release()) < 10:
                 logger.warning('OneOCR is not supported on Windows older than 10!')
@@ -939,10 +943,10 @@ class OneOCR:
         if sys.platform == 'win32':
             try:
                 ocr_resp = self.model.recognize_pil(img)
-                # if os.path.exists(os.path.expanduser("~/GSM/temp")):
-                #     with open(os.path.join(os.path.expanduser("~/GSM/temp"), 'oneocr_response.json'), 'w',
-                #                 encoding='utf-8') as f:
-                #         json.dump(ocr_resp, f, indent=4, ensure_ascii=False)
+                if os.path.exists(os.path.expanduser("~/GSM/temp")):
+                    with open(os.path.join(os.path.expanduser("~/GSM/temp"), 'oneocr_response.json'), 'w',
+                                encoding='utf-8') as f:
+                        json.dump(ocr_resp, f, indent=4, ensure_ascii=False)
                 # print(json.dumps(ocr_resp))
                 filtered_lines = [line for line in ocr_resp['lines'] if self.regex.search(line['text'])]
                 x_coords = [line['bounding_rect'][f'x{i}'] for line in filtered_lines for i in range(1, 5)]
@@ -955,17 +959,21 @@ class OneOCR:
                 boxes = []
                 if furigana_filter_sensitivity > 0:
                     for line in filtered_lines:
-                        x1, x2, x3, x4 = line['bounding_rect']['x1'], line['bounding_rect']['x2'], \
-                            line['bounding_rect']['x3'], line['bounding_rect']['x4']
-                        y1, y2, y3, y4 = line['bounding_rect']['y1'], line['bounding_rect']['y2'], \
-                            line['bounding_rect']['y3'], line['bounding_rect']['y4']
-                        width = max(x2 - x1, x3 - x4)
-                        height = max(y3 - y1, y4 - y2)
-                        if width > furigana_filter_sensitivity and height > furigana_filter_sensitivity:
-                            res += line['text']
-                        else:
-                            skipped.extend(char for char in line['text'])
-                            continue
+                        for char in line['words']:
+                            if self.punctuation_regex.findall(char['text']):
+                                res += char['text']
+                                continue
+                            x1, x2, x3, x4 = char['bounding_rect']['x1'], char['bounding_rect']['x2'], \
+                            char['bounding_rect']['x3'], char['bounding_rect']['x4']
+                            y1, y2, y3, y4 = char['bounding_rect']['y1'], char['bounding_rect']['y2'], \
+                                char['bounding_rect']['y3'], char['bounding_rect']['y4']
+                            width = max(x2 - x1, x3 - x4)
+                            height = max(y3 - y1, y4 - y2)
+                            if width > furigana_filter_sensitivity and height > furigana_filter_sensitivity:
+                                res += char['text']
+                            else:
+                                skipped.extend(char for char in line['text'])
+                                continue
                         res += '\n'
                     # logger.info(
                     #     f"Skipped {len(skipped)} chars due to furigana filter sensitivity: {furigana_filter_sensitivity}")
