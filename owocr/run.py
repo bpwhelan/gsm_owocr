@@ -1785,7 +1785,7 @@ def run(read_from=None,
                     continue
 
                 res, text = process_and_write_results(img, write_to, last_result, filtering, notify,
-                                                   ocr_start_time=ocr_start_time, furigana_filter_sensitivity=get_ocr_furigana_filter_sensitivity())
+                                                   ocr_start_time=ocr_start_time, furigana_filter_sensitivity=None if get_ocr_two_pass_ocr() else get_furigana_filter_sensitivity())
                 if not text and not previous_text and time.time() - last_result_time > 10:
                     sleep_time_to_add += .005
                     logger.info(f"No text detected again, sleeping.")

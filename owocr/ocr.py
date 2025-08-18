@@ -377,16 +377,13 @@ class GoogleLens:
                         res += 'BLANK_LINE'
                 for line in paragraph['lines']:
                     if furigana_filter_sensitivity:
+                        line_width = line['geometry']['bounding_box']['width'] * img.width
+                        line_height = line['geometry']['bounding_box']['height'] * img.height
                         for word in line['words']:
                             if self.punctuation_regex.findall(word['plain_text']):
                                 res += word['plain_text'] + word['text_separator']
                                 continue
-                            if 'geometry' not in word:
-                                res += word['plain_text'] + word['text_separator']
-                                continue
-                            word_width = word['geometry']['bounding_box']['width'] * img.width
-                            word_height = word['geometry']['bounding_box']['height'] * img.height
-                            if word_width > furigana_filter_sensitivity and word_height > furigana_filter_sensitivity:
+                            if line_width > furigana_filter_sensitivity and line_height > furigana_filter_sensitivity:
                                 res += word['plain_text'] + word['text_separator']
                             else:
                                 skipped.extend(word['plain_text'])
@@ -394,7 +391,8 @@ class GoogleLens:
                     else:
                         for word in line['words']:
                             res += word['plain_text'] + word['text_separator']
-                            
+                    res += '\n'
+
                 previous_line = paragraph
             res += '\n'
             # logger.info(
@@ -920,7 +918,7 @@ class OneOCR:
             self.regex = re.compile(
             r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
 
-    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False, multiple_crop_coords=False, return_one_box=True):
+    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False, multiple_crop_coords=False, return_one_box=True, return_dict=False):
         lang = get_ocr_language()
         if furigana_filter_sensitivity != None:
             furigana_filter_sensitivity = get_furigana_filter_sensitivity()
@@ -940,6 +938,7 @@ class OneOCR:
             return (False, 'Invalid image provided')
         crop_coords = None
         crop_coords_list = []
+        ocr_resp = ''
         if sys.platform == 'win32':
             try:
                 ocr_resp = self.model.recognize_pil(img)
@@ -959,17 +958,17 @@ class OneOCR:
                 boxes = []
                 if furigana_filter_sensitivity > 0:
                     for line in filtered_lines:
+                        line_x1, line_x2, line_x3, line_x4 = line['bounding_rect']['x1'], line['bounding_rect']['x2'], \
+                            line['bounding_rect']['x3'], line['bounding_rect']['x4']
+                        line_y1, line_y2, line_y3, line_y4 = line['bounding_rect']['y1'], line['bounding_rect']['y2'], \
+                            line['bounding_rect']['y3'], line['bounding_rect']['y4']
+                        line_width = max(line_x2 - line_x1, line_x3 - line_x4)
+                        line_height = max(line_y3 - line_y1, line_y4 - line_y2)
                         for char in line['words']:
                             if self.punctuation_regex.findall(char['text']):
                                 res += char['text']
                                 continue
-                            x1, x2, x3, x4 = char['bounding_rect']['x1'], char['bounding_rect']['x2'], \
-                            char['bounding_rect']['x3'], char['bounding_rect']['x4']
-                            y1, y2, y3, y4 = char['bounding_rect']['y1'], char['bounding_rect']['y2'], \
-                                char['bounding_rect']['y3'], char['bounding_rect']['y4']
-                            width = max(x2 - x1, x3 - x4)
-                            height = max(y3 - y1, y4 - y2)
-                            if width > furigana_filter_sensitivity and height > furigana_filter_sensitivity:
+                            if line_width > furigana_filter_sensitivity and line_height > furigana_filter_sensitivity:
                                 res += char['text']
                             else:
                                 skipped.extend(char for char in line['text'])
@@ -1042,6 +1041,8 @@ class OneOCR:
             x.append(crop_coords_list)
         if return_one_box:
             x.append(crop_coords)
+        if return_dict:
+            x.append(ocr_resp)
         if is_path:
             img.close()
         return x
