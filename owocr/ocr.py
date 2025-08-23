@@ -106,6 +106,7 @@ def empty_post_process(text):
 
 def post_process(text, keep_blank_lines=False):
     import jaconv
+    text = text.replace("\"", "")
     if keep_blank_lines:
         text = '\n'.join([''.join(i.split()) for i in text.splitlines()])
     else:
@@ -354,8 +355,8 @@ class GoogleLens:
         response_proto = LensOverlayServerResponse().FromString(res.content)
         response_dict = response_proto.to_dict(betterproto.Casing.SNAKE)
 
-        if os.path.exists(r"C:\Users\Beangate\GSM\Electron App\test"):
-            with open(os.path.join(r"C:\Users\Beangate\GSM\Electron App\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
+        if os.path.exists(r"C:\Users\Beangate\GSM\test"):
+            with open(os.path.join(r"C:\Users\Beangate\GSM\test", 'glens_response.json'), 'w', encoding='utf-8') as f:
                 json.dump(response_dict, f, indent=4, ensure_ascii=False)
         res = ''
         text = response_dict['objects_response']['text']
@@ -1433,10 +1434,10 @@ class localLLMOCR:
             self.keep_warm = config.get('keep_warm', True)
             self.custom_prompt = config.get('prompt', None)
             self.available = True
-            # if any(x in self.api_url for x in ['localhost', '127.0.0.1']):
-            #     if not self.check_connection(self.api_url):
-            #         logger.warning('Local LLM OCR API is not reachable')
-            #         return
+            if any(x in self.api_url for x in ['localhost', '127.0.0.1']):
+                if not self.check_connection(self.api_url):
+                    logger.warning('Local LLM OCR API is not reachable')
+                    return
             self.client = openai.OpenAI(
                 base_url=self.api_url.replace('/v1/chat/completions', '/v1'),
                 api_key=self.api_key
@@ -1493,7 +1494,7 @@ class localLLMOCR:
                 prompt = self.custom_prompt.strip()
             else:
                 prompt = f"""
-                Extract all {CommonLanguages.from_code(get_ocr_language()).name} Text from Image. Ignore all Furigana. Do not return any commentary, just the text in the image. If there is no text in the image, return "" (Empty String).
+                Extract all {CommonLanguages.from_code(get_ocr_language()).name} Text from Image. Ignore all Furigana. Do not return any commentary, just the text in the image. Do not Translate. If there is no text in the image, return "" (Empty String).
                 """
 
             response = self.client.chat.completions.create(

@@ -1,5 +1,6 @@
-from ...ocr.gsm_ocr_config import set_dpi_awareness, get_scene_ocr_config_path, OCRConfig, get_scene_ocr_config
-from ...util.electron_config import *
+from GameSentenceMiner.ocr.gsm_ocr_config import set_dpi_awareness, get_scene_ocr_config
+from GameSentenceMiner.util.electron_config import *  # noqa: F403
+from GameSentenceMiner.util.gsm_utils import do_text_replacements, OCR_REPLACEMENTS_FILE
 
 try:
     import win32gui
@@ -28,7 +29,6 @@ import signal
 import threading
 from pathlib import Path
 import queue
-import io
 import re
 import logging
 import inspect
@@ -39,23 +39,22 @@ import mss
 import asyncio
 import websockets
 import socketserver
-import queue
+import cv2
+import numpy as np
 
 from datetime import datetime, timedelta
-from PIL import Image, ImageDraw, UnidentifiedImageError
+from PIL import Image, ImageDraw
 from loguru import logger
 from desktop_notifier import DesktopNotifierSync
 import psutil
 
-import inspect
-from .ocr import *
-try:
-    from .secret import *
-except ImportError:
-    pass
+from .ocr import *  # noqa: F403
 from .config import Config
 from .screen_coordinate_picker import get_screen_selection
-from GameSentenceMiner.util.configuration import get_temporary_directory, get_config
+from GameSentenceMiner.util.configuration import get_temporary_directory
+
+from skimage.metrics import structural_similarity as ssim
+from typing import Union
 
 config = None
 last_image = None
@@ -799,8 +798,6 @@ class ScreenshotThread(threading.Thread):
             self.windows_window_tracker_instance.join()
 
 
-import cv2
-import numpy as np
     
 def apply_adaptive_threshold_filter(img):
     img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
@@ -864,11 +861,6 @@ def are_images_identical(img1, img2, img2_np=None):
 
     return (img1_np.shape == img2_np.shape) and np.array_equal(img1_np, img2_np)
 
-
-import cv2
-import numpy as np
-from skimage.metrics import structural_similarity as ssim
-from typing import Union
 
 ImageType = Union[np.ndarray, Image.Image]
 
@@ -1319,6 +1311,10 @@ def on_screenshot_combo():
 def on_window_minimized(minimized):
     global screencapture_window_visible
     screencapture_window_visible = not minimized
+    
+
+def do_configured_ocr_replacements(text: str) -> str:
+    return do_text_replacements(text, OCR_REPLACEMENTS_FILE)
 
 
 def process_and_write_results(img_or_path, write_to=None, last_result=None, filtering=None, notify=None, engine=None, ocr_start_time=None, furigana_filter_sensitivity=0):
@@ -1364,14 +1360,21 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
     # print(engine_index)
 
     if res:
+        text = do_configured_ocr_replacements(text)
         if filtering:
             text, orig_text = filtering(text, last_result)
         if get_ocr_language() == "ja" or get_ocr_language() == "zh":
             text = post_process(text, keep_blank_lines=get_ocr_keep_newline())
-        logger.opt(ansi=True).info(
-            f'Text recognized in {end_time - start_time:0.03f}s using <{engine_color}>{engine_instance.readable_name}</{engine_color}>: {text}')
         if notify and config.get_general('notifications'):
             notifier.send(title='owocr', message='Text recognized: ' + text)
+            
+        if text and write_to is not None:
+            if check_text_is_all_menu(text, crop_coords):
+                logger.opt(ansi=True).info('Text is identified as all menu items, skipping further processing.')
+                return orig_text, ''
+            
+        logger.opt(ansi=True).info(
+    f'Text recognized in {end_time - start_time:0.03f}s using <{engine_color}>{engine_instance.readable_name}</{engine_color}>: {text}')
 
         if write_to == 'websocket':
             websocket_server_thread.send_text(text)
@@ -1395,6 +1398,83 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
 
     return orig_text, text
 
+def check_text_is_all_menu(text: str, crop_coords: tuple) -> bool:
+    """
+    Checks if the recognized text consists entirely of menu items.
+    This function checks if the detected text area falls entirely within secondary rectangles (menu areas).
+
+    :param text: The recognized text from OCR.
+    :param crop_coords: Tuple containing (x, y, width, height) of the detected text area relative to the cropped image.
+    :return: True if the text is all menu items (within secondary rectangles), False otherwise.
+    """
+    if not text or not crop_coords:
+        return False
+
+    original_width = obs_screenshot_thread.width
+    original_height = obs_screenshot_thread.height
+    crop_x, crop_y, crop_w, crop_h = crop_coords
+
+    ocr_config = get_scene_ocr_config()
+    
+    if not any(rect.is_secondary for rect in ocr_config.rectangles):
+        return False
+
+    ocr_config.scale_to_custom_size(original_width, original_height)
+    if not ocr_config or not ocr_config.rectangles:
+        return False
+
+    primary_rectangles = [rect for rect in ocr_config.rectangles if not rect.is_excluded and not rect.is_secondary]
+    menu_rectangles = [rect for rect in ocr_config.rectangles if rect.is_secondary and not rect.is_excluded]
+
+    if not menu_rectangles:
+        return False
+
+    if not primary_rectangles:
+        if crop_x < 0 or crop_y < 0 or crop_x + crop_w > original_width or crop_y + crop_h > original_height:
+            return False
+        for menu_rect in menu_rectangles:
+            rect_left, rect_top, rect_width, rect_height = menu_rect.coordinates
+            rect_right = rect_left + rect_width
+            rect_bottom = rect_top + rect_height
+            if (crop_x >= rect_left and crop_y >= rect_top and
+                crop_x + crop_w <= rect_right and crop_y + crop_h <= rect_bottom):
+                return True
+        return False
+
+    primary_rectangles.sort(key=lambda r: r.coordinates[1])
+
+    if len(primary_rectangles) == 1:
+        primary_rect = primary_rectangles[0]
+        primary_left, primary_top = primary_rect.coordinates[0], primary_rect.coordinates[1]
+        original_x = crop_x + primary_left
+        original_y = crop_y + primary_top
+    else:
+        current_y_offset = 0
+        original_x = None
+        original_y = None
+        for i, primary_rect in enumerate(primary_rectangles):
+            primary_left, primary_top, primary_width, primary_height = primary_rect.coordinates
+            section_height = primary_height
+            if crop_y >= current_y_offset and crop_y < current_y_offset + section_height:
+                original_x = crop_x + primary_left
+                original_y = (crop_y - current_y_offset) + primary_top
+                break
+            current_y_offset += section_height + 50
+        if original_x is None or original_y is None:
+            return False
+
+    if original_x < 0 or original_y < 0 or original_x > original_width or original_y > original_height:
+        return False
+
+    for menu_rect in menu_rectangles:
+        rect_left, rect_top, rect_width, rect_height = menu_rect.coordinates
+        rect_right = rect_left + rect_width
+        rect_bottom = rect_top + rect_height
+        if (original_x >= rect_left and original_y >= rect_top and
+            original_x <= rect_right and original_y <= rect_bottom):
+            return True
+
+    return False
 
 def get_path_key(path):
     return path, path.lstat().st_mtime
