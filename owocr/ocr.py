@@ -1014,7 +1014,6 @@ class OneOCR:
                     res = ocr_resp['text']
                     
                 if multiple_crop_coords:
-                    logger.info(f"Getting multiple crop coords for {len(filtered_lines)} lines")
                     for line in filtered_lines:
                         crop_coords_list.append(
                             (line['bounding_rect']['x1'] - 5, line['bounding_rect']['y1'] - 5,
@@ -1434,13 +1433,10 @@ class localLLMOCR:
             self.keep_warm = config.get('keep_warm', True)
             self.custom_prompt = config.get('prompt', None)
             self.available = True
-            if any(x in self.api_url for x in ['localhost', '127.0.0.1']):
-                if not self.check_connection(self.api_url):
-                    logger.warning('Local LLM OCR API is not reachable')
-                    return
             self.client = openai.OpenAI(
                 base_url=self.api_url.replace('/v1/chat/completions', '/v1'),
-                api_key=self.api_key
+                api_key=self.api_key,
+                timeout=3
             )
             if self.client.models.retrieve(self.model):
                 self.model = self.model
@@ -1450,24 +1446,6 @@ class localLLMOCR:
                 self.keep_llm_hot_thread.start()
         except Exception as e:
             logger.warning(f'Error initializing Local LLM OCR, Local LLM OCR will not work!')
-            
-    def check_connection(self, url, port=None):
-        import http.client
-        conn = http.client.HTTPConnection(url, port or 1234, timeout=0.1)
-        try:
-            conn.request("GET", "/v1/models")
-            response = conn.getresponse()
-            if response.status == 200:
-                logger.info('Local LLM OCR API is reachable')
-                return True
-            else:
-                logger.warning('Local LLM OCR API is not reachable')
-                return False
-        except Exception as e:
-            logger.warning(f'Error connecting to Local LLM OCR API: {e}')
-            return False
-        finally:
-            conn.close()
         
     def keep_llm_warm(self):
         def ocr_blank_black_image():
