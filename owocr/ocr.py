@@ -1243,7 +1243,7 @@ class OCRSpace:
 class GeminiOCR:
     name = 'gemini'
     readable_name = 'Gemini'
-    key = 'm'
+    key = ';'
     available = False
 
     def __init__(self, config={'api_key': None}, lang='ja'):
@@ -1433,10 +1433,14 @@ class localLLMOCR:
             self.keep_warm = config.get('keep_warm', True)
             self.custom_prompt = config.get('prompt', None)
             self.available = True
+            if not self.check_url_for_connectivity(self.api_url):
+                self.available = False
+                logger.warning(f'Local LLM OCR API URL not reachable: {self.api_url}')
+                return
             self.client = openai.OpenAI(
                 base_url=self.api_url.replace('/v1/chat/completions', '/v1'),
                 api_key=self.api_key,
-                timeout=3
+                timeout=1
             )
             if self.client.models.retrieve(self.model):
                 self.model = self.model
@@ -1446,7 +1450,15 @@ class localLLMOCR:
                 self.keep_llm_hot_thread.start()
         except Exception as e:
             logger.warning(f'Error initializing Local LLM OCR, Local LLM OCR will not work!')
-        
+            
+    def check_url_for_connectivity(self, url):
+        import requests
+        try:
+            response = requests.get(url, timeout=0.5)
+            return response.status_code == 200
+        except Exception:
+            return False
+
     def keep_llm_warm(self):
         def ocr_blank_black_image():
             if self.last_ocr_time and (time.time() - self.last_ocr_time) < 5:

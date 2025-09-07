@@ -42,6 +42,7 @@ import socketserver
 import cv2
 import numpy as np
 
+from collections import deque
 from datetime import datetime, timedelta
 from PIL import Image, ImageDraw
 from loguru import logger
@@ -337,6 +338,7 @@ class TextFiltering:
         self.thai_regex = re.compile(r'[\u0E00-\u0E7F]')
         self.latin_extended_regex = re.compile(
             r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
+        self.last_few_results = {}
         try:
             from transformers import pipeline, AutoTokenizer
             import torch
@@ -361,7 +363,7 @@ class TextFiltering:
             import langid
             self.classify = langid.classify
 
-    def __call__(self, text, last_result):
+    def __call__(self, text, last_result, engine=None, is_second_ocr=False):
         lang = get_ocr_language()
         if self.initial_lang != lang:
             from pysbd import Segmenter
@@ -402,11 +404,24 @@ class TextFiltering:
 
         try:
             if isinstance(last_result, list):
-                last_text = last_result
+                last_text = last_result.copy()
             elif last_result and last_result[1] == engine_index:
                 last_text = last_result[0]
             else:
                 last_text = []
+            
+            if engine and not is_second_ocr:
+                if self.last_few_results and self.last_few_results.get(engine):
+                    for sublist in self.last_few_results.get(engine, []):
+                        if sublist:
+                            for item in sublist:
+                                if item and item not in last_text:
+                                    last_text.append(item)
+                    self.last_few_results[engine].append(orig_text_filtered)
+                else:
+                    self.last_few_results[engine] = deque(maxlen=3)
+                    self.last_few_results[engine].append(orig_text_filtered)
+
         except Exception as e:
             logger.error(f"Error processing last_result {last_result}: {e}")
             last_text = []
@@ -981,7 +996,7 @@ def quick_text_detection(pil_image, threshold_ratio=0.01):
 
 # Use OBS for Screenshot Source (i.e. Linux)
 class OBSScreenshotThread(threading.Thread):
-    def __init__(self, ocr_config, screen_capture_on_combo, width=1280, height=720, interval=1):
+    def __init__(self, ocr_config, screen_capture_on_combo, width=1280, height=720, interval=1, is_manual_ocr=False):
         super().__init__(daemon=True)
         self.ocr_config = ocr_config
         self.interval = interval
@@ -992,6 +1007,7 @@ class OBSScreenshotThread(threading.Thread):
         self.width = width
         self.height = height
         self.use_periodic_queue = not screen_capture_on_combo
+        self.is_manual_ocr = is_manual_ocr
 
     def write_result(self, result):
         if self.use_periodic_queue:
@@ -1003,62 +1019,26 @@ class OBSScreenshotThread(threading.Thread):
     def connect_obs(self):
         import GameSentenceMiner.obs as obs
         obs.connect_to_obs_sync(check_output=False)
-
-    def scale_down_width_height(self, width, height):
-        if width == 0 or height == 0:
-            return self.width, self.height
-        # return width, height
-        aspect_ratio = width / height
-        logger.info(
-            f"Scaling down OBS source dimensions: {width}x{height} (Aspect Ratio: {aspect_ratio})")
-        if aspect_ratio > 2.66:
-            # Ultra-wide (32:9) - use 1920x540
-            logger.info("Using ultra-wide aspect ratio scaling (32:9).")
-            return 1920, 540
-        elif aspect_ratio > 2.33:
-            # 21:9 - use 1920x800
-            logger.info("Using ultra-wide aspect ratio scaling (21:9).")
-            return 1920, 800
-        elif aspect_ratio > 1.77:
-            # 16:9 - use 1280x720
-            logger.info("Using standard aspect ratio scaling (16:9).")
-            return 1280, 720
-        elif aspect_ratio > 1.6:
-            # 16:10 - use 1280x800
-            logger.info("Using standard aspect ratio scaling (16:10).")
-            return 1280, 800
-        elif aspect_ratio > 1.33:
-            # 4:3 - use 960x720
-            logger.info("Using standard aspect ratio scaling (4:3).")
-            return 960, 720
-        elif aspect_ratio > 1.25:
-            # 5:4 - use 900x720
-            logger.info("Using standard aspect ratio scaling (5:4).")
-            return 900, 720
-        elif aspect_ratio > 1.5:
-            # 3:2 - use 1080x720
-            logger.info("Using standard aspect ratio scaling (3:2).")
-            return 1080, 720
-        else:
-            # Default fallback - use original resolution
-            logger.info(
-                "Using default aspect ratio scaling (original resolution).")
-            return width, height
         
     def init_config(self, source=None, scene=None):
         import GameSentenceMiner.obs as obs
         obs.update_current_game()
         self.current_source = source if source else obs.get_active_source()
-        logger.info(f"Current OBS source: {self.current_source}")
+        logger.debug(f"Current OBS source: {self.current_source}")
         self.source_width = self.current_source.get(
             "sceneItemTransform").get("sourceWidth") or self.width
         self.source_height = self.current_source.get(
             "sceneItemTransform").get("sourceHeight") or self.height
-        if self.source_width and self.source_height:
-            self.width, self.height = self.scale_down_width_height(
+        if self.source_width and self.source_height and not self.is_manual_ocr and not get_ocr_two_pass_ocr():
+            self.width, self.height = scale_down_width_height(
                 self.source_width, self.source_height)
             logger.info(
-                f"Using OBS source dimensions: {self.width}x{self.height}")
+                f"Using OBS source dimensions: {self.source_width}x{self.source_height}")
+        else:
+            self.width = self.source_width or 1280
+            self.height = self.source_height or 720
+            logger.info(
+                f"Using source dimensions: {self.width}x{self.height}")
         self.current_source_name = self.current_source.get(
             "sourceName") or None
         self.current_scene = scene if scene else obs.get_current_game()
@@ -1105,7 +1085,7 @@ class OBSScreenshotThread(threading.Thread):
                     self.write_result(1)
                     continue
                 img = obs.get_screenshot_PIL(source_name=self.current_source_name,
-                                             width=self.width, height=self.height, img_format='jpg', compression=80)
+                                             width=self.width, height=self.height, img_format='jpg', compression=100)
                 
                 img = apply_ocr_config_to_image(img, self.ocr_config)
 
@@ -1120,6 +1100,39 @@ class OBSScreenshotThread(threading.Thread):
                     f"An unexpected error occurred during OBS Capture : {e}", exc_info=True)
                 time.sleep(.5)
                 continue
+            
+def scale_down_width_height(width, height):
+        if width == 0 or height == 0:
+            return width, height
+        # return width, height
+        aspect_ratio = width / height
+        logger.info(
+            f"Scaling down OBS source dimensions: {width}x{height} (Aspect Ratio: {aspect_ratio})")
+        if aspect_ratio > 2.66:
+            logger.info("Using ultra-wide aspect ratio scaling (32:9).")
+            return 1920, 540
+        elif aspect_ratio > 2.33:
+            logger.info("Using ultra-wide aspect ratio scaling (21:9).")
+            return 1920, 800
+        elif aspect_ratio > 1.77:
+            logger.info("Using standard aspect ratio scaling (16:9).")
+            return 1280, 720
+        elif aspect_ratio > 1.6:
+            logger.info("Using standard aspect ratio scaling (16:10).")
+            return 1280, 800
+        elif aspect_ratio > 1.33:
+            logger.info("Using standard aspect ratio scaling (4:3).")
+            return 960, 720
+        elif aspect_ratio > 1.25:
+            logger.info("Using standard aspect ratio scaling (5:4).")
+            return 900, 720
+        elif aspect_ratio > 1.5:
+            logger.info("Using standard aspect ratio scaling (3:2).")
+            return 1080, 720
+        else:
+            logger.info(
+                "Using default aspect ratio scaling (original resolution).")
+            return width, height
 
 
 def apply_ocr_config_to_image(img, ocr_config, is_secondary=False):
@@ -1317,8 +1330,10 @@ def do_configured_ocr_replacements(text: str) -> str:
     return do_text_replacements(text, OCR_REPLACEMENTS_FILE)
 
 
-def process_and_write_results(img_or_path, write_to=None, last_result=None, filtering=None, notify=None, engine=None, ocr_start_time=None, furigana_filter_sensitivity=0):
+def process_and_write_results(img_or_path, write_to=None, last_result=None, filtering: TextFiltering = None, notify=None, engine=None, ocr_start_time=None, furigana_filter_sensitivity=0):
     global engine_index
+    # TODO Replace this at a later date
+    is_second_ocr = bool(engine)
     if auto_pause_handler:
         auto_pause_handler.stop()
     if engine:
@@ -1328,9 +1343,10 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
                 break
     else:
         engine_instance = engine_instances[engine_index]
+        engine = engine_instance.name
 
     engine_color = config.get_general('engine_color')
-
+    
     start_time = time.time()
     result = engine_instance(img_or_path, furigana_filter_sensitivity)
     res, text, crop_coords = (*result, None)[:3]
@@ -1362,7 +1378,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
     if res:
         text = do_configured_ocr_replacements(text)
         if filtering:
-            text, orig_text = filtering(text, last_result)
+            text, orig_text = filtering(text, last_result, engine=engine, is_second_ocr=is_second_ocr)
         if get_ocr_language() == "ja" or get_ocr_language() == "zh":
             text = post_process(text, keep_blank_lines=get_ocr_keep_newline())
         if notify and config.get_general('notifications'):
@@ -1382,7 +1398,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
             pyperclipfix.copy(text)
         elif write_to == "callback":
             txt_callback(text, orig_text, ocr_start_time,
-                         img_or_path, bool(engine), filtering, crop_coords)
+                         img_or_path, is_second_ocr, filtering, crop_coords)
         elif write_to:
             with Path(write_to).open('a', encoding='utf-8') as f:
                 f.write(text + '\n')
@@ -1404,7 +1420,7 @@ def check_text_is_all_menu(text: str, crop_coords: tuple) -> bool:
     This function checks if the detected text area falls entirely within secondary rectangles (menu areas).
 
     :param text: The recognized text from OCR.
-    :param crop_coords: Tuple containing (x, y, width, height) of the detected text area relative to the cropped image.
+    :param crop_coords: Tuple containing (x, y, x2, y2) of the detected text area relative to the cropped image.
     :return: True if the text is all menu items (within secondary rectangles), False otherwise.
     """
     if not text or not crop_coords:
@@ -1412,7 +1428,7 @@ def check_text_is_all_menu(text: str, crop_coords: tuple) -> bool:
 
     original_width = obs_screenshot_thread.width
     original_height = obs_screenshot_thread.height
-    crop_x, crop_y, crop_w, crop_h = crop_coords
+    crop_x, crop_y, crop_x2, crop_y2 = crop_coords
 
     ocr_config = get_scene_ocr_config()
     
@@ -1430,14 +1446,14 @@ def check_text_is_all_menu(text: str, crop_coords: tuple) -> bool:
         return False
 
     if not primary_rectangles:
-        if crop_x < 0 or crop_y < 0 or crop_x + crop_w > original_width or crop_y + crop_h > original_height:
+        if crop_x < 0 or crop_y < 0 or crop_x2 > original_width or crop_y2 > original_height:
             return False
         for menu_rect in menu_rectangles:
             rect_left, rect_top, rect_width, rect_height = menu_rect.coordinates
             rect_right = rect_left + rect_width
             rect_bottom = rect_top + rect_height
             if (crop_x >= rect_left and crop_y >= rect_top and
-                crop_x + crop_w <= rect_right and crop_y + crop_h <= rect_bottom):
+                crop_x2 <= rect_right and crop_y2 <= rect_bottom):
                 return True
         return False
 
@@ -1445,19 +1461,25 @@ def check_text_is_all_menu(text: str, crop_coords: tuple) -> bool:
 
     if len(primary_rectangles) == 1:
         primary_rect = primary_rectangles[0]
-        primary_left, primary_top = primary_rect.coordinates[0], primary_rect.coordinates[1]
+        primary_left, primary_top, primary_width, primary_height = primary_rect.coordinates
         original_x = crop_x + primary_left
         original_y = crop_y + primary_top
+        original_x2 = crop_x2 + primary_left
+        original_y2 = crop_y2 + primary_top
     else:
         current_y_offset = 0
         original_x = None
         original_y = None
+        original_x2 = None
+        original_y2 = None
         for i, primary_rect in enumerate(primary_rectangles):
             primary_left, primary_top, primary_width, primary_height = primary_rect.coordinates
             section_height = primary_height
             if crop_y >= current_y_offset and crop_y < current_y_offset + section_height:
                 original_x = crop_x + primary_left
                 original_y = (crop_y - current_y_offset) + primary_top
+                original_x2 = crop_x2 + primary_left
+                original_y2 = crop_y2 + primary_top
                 break
             current_y_offset += section_height + 50
         if original_x is None or original_y is None:
@@ -1471,7 +1493,7 @@ def check_text_is_all_menu(text: str, crop_coords: tuple) -> bool:
         rect_right = rect_left + rect_width
         rect_bottom = rect_top + rect_height
         if (original_x >= rect_left and original_y >= rect_top and
-            original_x <= rect_right and original_y <= rect_bottom):
+            original_x2 <= rect_right and original_y2 <= rect_bottom):
             return True
 
     return False
@@ -1712,7 +1734,7 @@ def run(read_from=None,
         last_result = ([], engine_index)
         screenshot_event = threading.Event()
         obs_screenshot_thread = OBSScreenshotThread(
-            gsm_ocr_config, screen_capture_on_combo, interval=screen_capture_delay_secs)
+            gsm_ocr_config, screen_capture_on_combo, interval=screen_capture_delay_secs, is_manual_ocr=bool(screen_capture_on_combo))
         obs_screenshot_thread.start()
         filtering = TextFiltering()
         read_from_readable.append('obs')
