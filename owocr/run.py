@@ -1029,11 +1029,11 @@ class OBSScreenshotThread(threading.Thread):
             "sceneItemTransform").get("sourceWidth") or self.width
         self.source_height = self.current_source.get(
             "sceneItemTransform").get("sourceHeight") or self.height
-        if self.source_width and self.source_height and not self.is_manual_ocr and not get_ocr_two_pass_ocr():
+        if self.source_width and self.source_height and not self.is_manual_ocr and get_ocr_two_pass_ocr():
             self.width, self.height = scale_down_width_height(
                 self.source_width, self.source_height)
             logger.info(
-                f"Using OBS source dimensions: {self.source_width}x{self.source_height}")
+                f"Using OBS source dimensions: {self.width}x{self.height}")
         else:
             self.width = self.source_width or 1280
             self.height = self.source_height or 720
