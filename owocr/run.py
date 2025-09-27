@@ -1,6 +1,11 @@
+import os
+import sys
+
 from GameSentenceMiner.ocr.gsm_ocr_config import set_dpi_awareness, get_scene_ocr_config
-from GameSentenceMiner.util.electron_config import *  # noqa: F403
 from GameSentenceMiner.util.gsm_utils import do_text_replacements, OCR_REPLACEMENTS_FILE
+from GameSentenceMiner.util.electron_config import get_ocr_language, get_ocr_requires_open_window, \
+    has_ocr_config_changed, reload_electron_config, get_ocr_scan_rate, get_ocr_two_pass_ocr, get_ocr_keep_newline, \
+    get_ocr_ocr1, get_furigana_filter_sensitivity
 
 try:
     import win32gui
@@ -1135,14 +1140,15 @@ def scale_down_width_height(width, height):
             return width, height
 
 
-def apply_ocr_config_to_image(img, ocr_config, is_secondary=False):
+def apply_ocr_config_to_image(img, ocr_config, is_secondary=False, rectangles=None):
     for rectangle in ocr_config.rectangles:
         if rectangle.is_excluded:
             left, top, width, height = rectangle.coordinates
             draw = ImageDraw.Draw(img)
             draw.rectangle((left, top, left + width, top + height), fill=(0, 0, 0, 0))
             
-    rectangles = [r for r in ocr_config.rectangles if not r.is_excluded and r.is_secondary == is_secondary]
+    if not rectangles:   
+        rectangles = [r for r in ocr_config.rectangles if not r.is_excluded and r.is_secondary == is_secondary]
     
     # Sort top to bottom
     if rectangles:
