@@ -57,7 +57,7 @@ import psutil
 from .ocr import *  # noqa: F403
 from .config import Config
 from .screen_coordinate_picker import get_screen_selection
-from GameSentenceMiner.util.configuration import get_temporary_directory
+from GameSentenceMiner.util.configuration import get_config, get_temporary_directory
 
 from skimage.metrics import structural_similarity as ssim
 from typing import Union
@@ -291,7 +291,7 @@ class WebsocketServerThread(threading.Thread):
             self._stop_event = stop_event = asyncio.Event()
             self._event.set()
             self.server = start_server = websockets.serve(
-                self.server_handler, '0.0.0.0', config.get_general('websocket_port'), max_size=1000000000)
+                self.server_handler, get_config().advanced.localhost_bind_address, config.get_general('websocket_port'), max_size=1000000000)
             async with start_server:
                 await stop_event.wait()
         asyncio.run(main())
