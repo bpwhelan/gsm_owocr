@@ -320,13 +320,20 @@ class RequestHandler(socketserver.BaseRequestHandler):
             conn.sendall(b'False')
 
 
+class PassthroughSegmenter:
+    def segment(self, text):
+        return [text]
+
 class TextFiltering:
     accurate_filtering = False
 
     def __init__(self, lang='ja'):
-        from pysbd import Segmenter
+        from pysbd import Segmenter, languages
         self.initial_lang = get_ocr_language() or lang
-        self.segmenter = Segmenter(language=get_ocr_language(), clean=True)
+        if lang in languages.LANGUAGE_CODES:
+            self.segmenter = Segmenter(language=lang, clean=True)
+        else:
+            self.segmenter = PassthroughSegmenter()
         self.kana_kanji_regex = re.compile(
             r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
         self.chinese_common_regex = re.compile(r'[\u4E00-\u9FFF]')
@@ -371,8 +378,11 @@ class TextFiltering:
     def __call__(self, text, last_result, engine=None, is_second_ocr=False):
         lang = get_ocr_language()
         if self.initial_lang != lang:
-            from pysbd import Segmenter
-            self.segmenter = Segmenter(language=get_ocr_language(), clean=True)
+            from pysbd import Segmenter, languages
+            if lang in languages.LANGUAGE_CODES:
+                self.segmenter = Segmenter(language=lang, clean=True)
+            else:
+                self.segmenter = PassthroughSegmenter()
             self.initial_lang = get_ocr_language()
 
         orig_text = self.segmenter.segment(text)
