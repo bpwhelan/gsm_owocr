@@ -375,7 +375,7 @@ class GoogleLens:
                     # logger.info(f"Vertical space: {vertical_space}, Average height: {avg_height}")
                     # logger.info(avg_height * 2)
                     if vertical_space > avg_height * 2:
-                        res += 'BLANK_LINE'
+                        res += 'BLANK_LINE\n'
                 for line in paragraph['lines']:
                     if furigana_filter_sensitivity:
                         line_width = line['geometry']['bounding_box']['width'] * img.width
