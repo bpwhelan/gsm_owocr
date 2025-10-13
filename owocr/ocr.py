@@ -277,11 +277,12 @@ class GoogleLens:
     key = 'l'
     available = False
 
-    def __init__(self, lang='ja'):
+    def __init__(self, lang='ja', get_furigana_sens_from_file=True):
         import regex
         self.regex = get_regex(lang)
         self.initial_lang = lang
         self.punctuation_regex = regex.compile(r'[\p{P}\p{S}]')
+        self.get_furigana_sens_from_file = get_furigana_sens_from_file
         if 'betterproto' not in sys.modules:
             logger.warning('betterproto not available, Google Lens will not work!')
         else:
@@ -289,10 +290,10 @@ class GoogleLens:
             logger.info('Google Lens ready')
 
     def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False):
-        if furigana_filter_sensitivity != None:
+        if self.get_furigana_sens_from_file:
             furigana_filter_sensitivity = get_furigana_filter_sensitivity()
         else:
-            furigana_filter_sensitivity = 0
+            furigana_filter_sensitivity = furigana_filter_sensitivity
         lang = get_ocr_language()
         img, is_path = input_to_pil_image(img)
         if lang != self.initial_lang:
@@ -362,6 +363,12 @@ class GoogleLens:
         text = response_dict['objects_response']['text']
         skipped = []
         previous_line = None
+        filtered_response_dict = response_dict
+        if furigana_filter_sensitivity:
+            import copy
+            filtered_response_dict = copy.deepcopy(response_dict)
+            filtered_paragraphs = []
+        
         if 'text_layout' in text:
             for paragraph in text['text_layout']['paragraphs']:
                 if previous_line:
@@ -376,25 +383,40 @@ class GoogleLens:
                     # logger.info(avg_height * 2)
                     if vertical_space > avg_height * 2:
                         res += 'BLANK_LINE\n'
+                passed_furigana_filter_lines = []
                 for line in paragraph['lines']:
                     if furigana_filter_sensitivity:
                         line_width = line['geometry']['bounding_box']['width'] * img.width
                         line_height = line['geometry']['bounding_box']['height'] * img.height
+                        passes = False
                         for word in line['words']:
                             if self.punctuation_regex.findall(word['plain_text']):
                                 res += word['plain_text'] + word['text_separator']
                                 continue
                             if line_width > furigana_filter_sensitivity and line_height > furigana_filter_sensitivity:
                                 res += word['plain_text'] + word['text_separator']
+                                passes = True
                             else:
                                 skipped.extend(word['plain_text'])
                                 continue
+                        if passes:
+                            passed_furigana_filter_lines.append(line)
                     else:
                         for word in line['words']:
                             res += word['plain_text'] + word['text_separator']
                     res += '\n'
 
+                if furigana_filter_sensitivity and passed_furigana_filter_lines:
+                    # Create a filtered paragraph with only the passing lines
+                    filtered_paragraph = paragraph.copy()
+                    filtered_paragraph['lines'] = passed_furigana_filter_lines
+                    filtered_paragraphs.append(filtered_paragraph)
+                
                 previous_line = paragraph
+            
+            if furigana_filter_sensitivity:
+                filtered_response_dict['objects_response']['text']['text_layout']['paragraphs'] = filtered_paragraphs
+            
             res += '\n'
             # logger.info(
             #     f"Skipped {len(skipped)} chars due to furigana filter sensitivity: {furigana_filter_sensitivity}")
@@ -438,7 +460,7 @@ class GoogleLens:
         #             res += '\n'
         
         if return_coords:
-            x = (True, res, response_dict)
+            x = (True, res, filtered_response_dict)
         else:
             x = (True, res)
 
@@ -869,11 +891,12 @@ class OneOCR:
     key = 'z'
     available = False
 
-    def __init__(self, config={}, lang='ja'):
+    def __init__(self, config={}, lang='ja', get_furigana_sens_from_file=True):
         import regex
         self.initial_lang = lang
         self.regex = get_regex(lang)
         self.punctuation_regex = regex.compile(r'[\p{P}\p{S}]')
+        self.get_furigana_sens_from_file = get_furigana_sens_from_file
         if sys.platform == 'win32':
             if int(platform.release()) < 10:
                 logger.warning('OneOCR is not supported on Windows older than 10!')
@@ -921,10 +944,10 @@ class OneOCR:
 
     def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False, multiple_crop_coords=False, return_one_box=True, return_dict=False):
         lang = get_ocr_language()
-        if furigana_filter_sensitivity != None:
+        if self.get_furigana_sens_from_file:
             furigana_filter_sensitivity = get_furigana_filter_sensitivity()
         else:
-            furigana_filter_sensitivity = 0
+            furigana_filter_sensitivity = furigana_filter_sensitivity
         if lang != self.initial_lang:
             self.initial_lang = lang
             self.regex = get_regex(lang)
@@ -958,6 +981,7 @@ class OneOCR:
                 skipped = []
                 boxes = []
                 if furigana_filter_sensitivity > 0:
+                    passing_lines = []
                     for line in filtered_lines:
                         line_x1, line_x2, line_x3, line_x4 = line['bounding_rect']['x1'], line['bounding_rect']['x2'], \
                             line['bounding_rect']['x3'], line['bounding_rect']['x4']
@@ -965,16 +989,20 @@ class OneOCR:
                             line['bounding_rect']['y3'], line['bounding_rect']['y4']
                         line_width = max(line_x2 - line_x1, line_x3 - line_x4)
                         line_height = max(line_y3 - line_y1, line_y4 - line_y2)
-                        for char in line['words']:
-                            if self.punctuation_regex.findall(char['text']):
+                        
+                        # Check if the line passes the size filter
+                        if line_width > furigana_filter_sensitivity and line_height > furigana_filter_sensitivity:
+                            # Line passes - include all its text and add to passing_lines
+                            for char in line['words']:
                                 res += char['text']
-                                continue
-                            if line_width > furigana_filter_sensitivity and line_height > furigana_filter_sensitivity:
-                                res += char['text']
-                            else:
+                            passing_lines.append(line)
+                        else:
+                            # Line fails - only include punctuation, skip the rest
+                            for char in line['words']:
                                 skipped.extend(char for char in line['text'])
-                                continue
                         res += '\n'
+                    filtered_lines = passing_lines
+                    return_resp = {'text': res, 'text_angle': ocr_resp['text_angle'], 'lines': passing_lines}
                     # logger.info(
                     #     f"Skipped {len(skipped)} chars due to furigana filter sensitivity: {furigana_filter_sensitivity}")
                     # widths, heights = [], []
@@ -1012,6 +1040,7 @@ class OneOCR:
                     #     res += '\n'
                 else:
                     res = ocr_resp['text']
+                    return_resp = ocr_resp
                     
                 if multiple_crop_coords:
                     for line in filtered_lines:
@@ -1042,7 +1071,7 @@ class OneOCR:
         if return_one_box:
             x.append(crop_coords)
         if return_dict:
-            x.append(ocr_resp)
+            x.append(return_resp)
         if is_path:
             img.close()
         return x
