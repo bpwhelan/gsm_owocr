@@ -111,8 +111,9 @@ def post_process(text, keep_blank_lines=False):
         text = '\n'.join([''.join(i.split()) for i in text.splitlines()])
     else:
         text = ''.join([''.join(i.split()) for i in text.splitlines()])
-    text = text.replace('…', '...')
-    text = re.sub('[・.]{2,}', lambda x: (x.end() - x.start()) * '.', text)
+    text = text.replace('…', '・・・')
+    text = re.sub('[・.]{2,}', lambda x: (x.end() - x.start()) * '・', text)
+    text = re.sub(r'・{3,}', '・・・', text)
     text = jaconv.h2z(text, ascii=True, digit=True)
     return text
 

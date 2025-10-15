@@ -1392,7 +1392,11 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
     # print(engine_index)
 
     if res:
-        text = do_configured_ocr_replacements(text)
+        if isinstance(text, list):
+            for i, line in enumerate(text):
+                text[i] = do_configured_ocr_replacements(line)
+        else:
+            text = do_configured_ocr_replacements(text)
         if filtering:
             text, orig_text = filtering(text, last_result, engine=engine, is_second_ocr=is_second_ocr)
         if get_ocr_language() == "ja" or get_ocr_language() == "zh":
