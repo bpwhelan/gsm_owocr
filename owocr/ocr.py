@@ -1539,6 +1539,579 @@ class localLLMOCR:
                 return (True, "")
         except Exception as e:
             return (False, f'Local LLM OCR request failed: {e}')
+        
+import os
+import onnxruntime as ort
+import numpy as np
+import cv2
+from huggingface_hub import hf_hub_download
+from PIL import Image
+import requests
+from io import BytesIO
+
+# --- HELPER FUNCTION FOR VISUALIZATION (Optional but useful) ---
+def draw_detections(image: np.ndarray, detections: list, model_name: str) -> np.ndarray:
+    """
+    Draws bounding boxes from the detection results onto an image.
+
+    Args:
+        image (np.ndarray): The original image (in BGR format).
+        detections (list): A list of detection dictionaries, e.g., [{"box": [x1, y1, x2, y2], "score": 0.95}, ...].
+        model_name (str): The name of the model ('tiny' or 'small') to determine box color.
+
+    Returns:
+        np.ndarray: The image with bounding boxes drawn on it.
+    """
+    output_image = image.copy()
+    color = (0, 255, 0) if model_name == "small" else (0, 0, 255) # Green for small, Blue for tiny
+    
+    for detection in detections:
+        box = detection['box']
+        score = detection['score']
+        
+        # Ensure coordinates are integers for drawing
+        x_min, y_min, x_max, y_max = map(int, box)
+        
+        # Draw the rectangle
+        cv2.rectangle(output_image, (x_min, y_min), (x_max, y_max), color, 2)
+        
+        # Optionally, add the score text
+        label = f"{score:.2f}"
+        cv2.putText(output_image, label, (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+    return output_image
+
+
+class MeikiTextDetector:
+    """
+    A class to perform text detection using the meiki.text.detect.v0 models.
+    
+    This class handles downloading the ONNX models from the Hugging Face Hub,
+    loading them into an ONNX Runtime session, and providing a simple interface
+    for inference.
+    """
+    name = 'meiki_text_detector'
+    readable_name = 'Meiki Text Detector'
+    available = False
+    key = ']'
+
+    def __init__(self, model_name: str = 'tiny'):
+        """
+        Initializes the detector by downloading and loading the specified ONNX model.
+
+        Args:
+            model_name (str): The model to use, either "tiny" or "small". 
+                              Defaults to "small".
+        """
+        if model_name not in ['tiny', 'small']:
+            raise ValueError("model_name must be either 'tiny' or 'small'")
+        
+        ort.preload_dlls(cuda=True, directory=None)
+
+        self.model_name = model_name
+        self.session = None
+        
+        # --- Model-specific parameters ---
+        if self.model_name == "tiny":
+            self.model_size = 320
+            self.is_color = False
+            self.onnx_filename = "meiki.text.detect.tiny.v0.onnx"
+        else: # "small"
+            self.model_size = 640
+            self.is_color = True
+            self.onnx_filename = "meiki.text.detect.small.v0.onnx"
+
+        try:
+            print(f"Initializing MeikiTextDetector with '{self.model_name}' model...")
+            MODEL_REPO = "rtr46/meiki.text.detect.v0"
+            
+            # Download the model file from the Hub and get its local path
+            model_path = hf_hub_download(repo_id=MODEL_REPO, filename=self.onnx_filename)
+            
+            # Load the ONNX model into an inference session
+            # providers = ['CUDAExecutionProvider']
+            providers = ['CPUExecutionProvider']
+            self.session = ort.InferenceSession(model_path, providers=providers)
+            
+            self.available = True
+            print("Model loaded successfully. MeikiTextDetector is ready.")
+            
+        except Exception as e:
+            print(f"Error initializing MeikiTextDetector: {e}")
+            self.available = False
+
+    def _resize_and_pad(self, image: np.ndarray):
+        """ 
+        Resizes and pads an image to the model's expected square size,
+        preserving the aspect ratio.
+        """
+        if self.is_color:
+            h, w, _ = image.shape
+        else:
+            h, w = image.shape
+
+        size = self.model_size
+        ratio = min(size / w, size / h)
+        new_w, new_h = int(w * ratio), int(h * ratio)
+        
+        resized_image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        
+        if self.is_color:
+            padded_image = np.zeros((size, size, 3), dtype=np.uint8)
+        else:
+            padded_image = np.zeros((size, size), dtype=np.uint8)
+            
+        pad_w, pad_h = (size - new_w) // 2, (size - new_h) // 2
+        padded_image[pad_h:pad_h + new_h, pad_w:pad_w + new_w] = resized_image
+        
+        return padded_image, ratio, pad_w, pad_h
+
+    def __call__(self, img, confidence_threshold: float = 0.4):
+        """
+        Performs text detection on an input image.
+
+        Args:
+            img: The input image. Can be a file path, URL, PIL Image, or a NumPy array (BGR format).
+            confidence_threshold (float): The threshold to filter out low-confidence detections.
+
+        Returns:
+            A list of dictionaries, where each dictionary represents a detected
+            text box and contains 'box' (a list of [x_min, y_min, x_max, y_max])
+            and 'score' (a float). Returns an empty list if no boxes are found.
+        """
+        if confidence_threshold is None:
+            confidence_threshold = 0.4
+        if not self.available:
+            raise RuntimeError("MeikiTextDetector is not available due to an initialization error.")
+
+        # --- Input Handling ---
+        if isinstance(img, str):
+            if img.startswith('http'):
+                response = requests.get(img)
+                pil_image = Image.open(BytesIO(response.content)).convert("RGB")
+            else:
+                pil_image = Image.open(img).convert("RGB")
+            # Convert PIL (RGB) to OpenCV (BGR) format
+            input_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+        elif isinstance(img, Image.Image):
+             # Convert PIL (RGB) to OpenCV (BGR) format
+            input_image = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
+        elif isinstance(img, np.ndarray):
+            input_image = img
+        else:
+            raise TypeError("Unsupported input type for 'img'. Use a file path, URL, PIL Image, or NumPy array.")
+
+
+        # --- Preprocessing ---
+        if self.is_color:
+            image_for_model = input_image
+        else:
+            image_for_model = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
+            
+        padded_image, ratio, pad_w, pad_h = self._resize_and_pad(image_for_model)
+        img_normalized = padded_image.astype(np.float32) / 255.0
+
+        if self.is_color:
+            img_transposed = np.transpose(img_normalized, (2, 0, 1))
+            input_tensor = np.expand_dims(img_transposed, axis=0)
+        else:
+            input_tensor = np.expand_dims(np.expand_dims(img_normalized, axis=0), axis=0)
+
+        # --- Inference ---
+        sizes_tensor = np.array([[self.model_size, self.model_size]], dtype=np.int64)
+        input_names = [inp.name for inp in self.session.get_inputs()]
+        inputs = {input_names[0]: input_tensor, input_names[1]: sizes_tensor}
+        
+        outputs = self.session.run(None, inputs)
+        
+        # print(outputs)
+
+        # --- Post-processing ---
+        if self.model_name == "tiny":
+            boxes = outputs[0]
+            scores = [1.0] * len(boxes) # Tiny model doesn't output scores
+        else: # "small"
+            _, boxes, scores = outputs
+            boxes, scores = boxes[0], scores[0]
+        
+        detections = []
+        for box, score in zip(boxes, scores):
+            if score < confidence_threshold:
+                continue
+            
+            x_min, y_min, x_max, y_max = box
+            
+            # Rescale box coordinates to the original image size
+            final_x_min = (x_min - pad_w) / ratio
+            final_y_min = (y_min - pad_h) / ratio
+            final_x_max = (x_max - pad_w) / ratio
+            final_y_max = (y_max - pad_h) / ratio
+            
+            detections.append({
+                "box": [final_x_min, final_y_min, final_x_max, final_y_max],
+                "score": float(score)
+            })
+            
+        # print(f"Processed with '{self.model_name}' model. Found {len(detections)} boxes with confidence > {confidence_threshold}.")
+
+        # Compute crop_coords as padded min/max of all detected boxes
+        if detections:
+            x_mins = [b['box'][0] for b in detections]
+            y_mins = [b['box'][1] for b in detections]
+            x_maxs = [b['box'][2] for b in detections]
+            y_maxs = [b['box'][3] for b in detections]
+
+            pad = 5
+            crop_xmin = min(x_mins) - pad
+            crop_ymin = min(y_mins) - pad
+            crop_xmax = max(x_maxs) + pad
+            crop_ymax = max(y_maxs) + pad
+
+            # Clamp to image bounds
+            h, w = input_image.shape[:2]
+            crop_xmin = max(0, int(floor(crop_xmin)))
+            crop_ymin = max(0, int(floor(crop_ymin)))
+            crop_xmax = min(w, int(floor(crop_xmax)))
+            crop_ymax = min(h, int(floor(crop_ymax)))
+
+            crop_coords = [crop_xmin, crop_ymin, crop_xmax, crop_ymax]
+        else:
+            crop_coords = None
+
+        resp = {
+            "boxes": detections,
+            "provider": 'meiki',
+            "crop_coords": crop_coords
+        }
+
+        return True, resp
+
+
+# --- EXAMPLE USAGE ---
+if __name__ == '__main__':
+    import datetime
+    # You can choose 'tiny' or 'small' here
+    meiki = MeikiTextDetector(model_name='small')
+    # Example: run a short warm-up then measure average over N runs
+    image_path = r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\lotsofsmalltext.png"
+    video_path = r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\tanetsumi_CdACfZkwMY.mp4"
+    # Warm-up run (helps with any one-time setup cost)
+    try:
+        _ = meiki(image_path, confidence_threshold=0.4)
+    except Exception as e:
+        print(f"Error running MeikiTextDetector on warm-up: {e}")
+        raise
+
+    # runs = 500
+    times = []
+    detections_list = []
+    # for i in range(runs):
+    #     start_time = datetime.datetime.now()
+    #     res, resp_dict = meiki(image_path, confidence_threshold=0.4)
+    #     detections = resp_dict['boxes']
+    #     dections_list.append(detections)
+    #     end_time = datetime.datetime.now()
+    #     times.append((end_time - start_time).total_seconds())
+    
+    # Process video frame by frame with cv2 (sample at ~10 FPS)
+    cap = cv2.VideoCapture(video_path)
+    try:
+        src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    except Exception:
+        src_fps = 30.0
+
+    target_fps = 10
+    sample_interval = max(1, int(round(src_fps / target_fps)))
+    runs = 0
+    last_detections = []
+    pil_img = None
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Only process sampled frames
+        if runs % sample_interval == 0:
+            # Convert to PIL image
+            try:
+                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            except Exception:
+                runs += 1
+                continue
+
+            # Run Meiki detector on the full frame (or you can crop before passing)
+            start_t = time.time()
+            try:
+                ok, resp = meiki(pil_img, confidence_threshold=0.4)
+                if ok:
+                    detections = resp.get('boxes', [])
+                else:
+                    detections = []
+            except Exception as e:
+                # on error, record empty detections but keep going
+                detections = []
+            end_t = time.time()
+
+            times.append(end_t - start_t)
+            detections_list.append(detections)
+            last_detections = detections
+
+        runs += 1
+
+    cap.release()
+
+    # Make sure 'detections' variable exists for later visualization
+    detections = last_detections
+
+    avg_time = sum(times) / len(times) if times else 0.0
+    
+    print(f"Average processing/inference time over {runs} runs: {avg_time:.4f} seconds")
+
+    # --- Stability / similarity analysis across detection runs ---
+    # We consider two boxes the same if their IoU >= iou_threshold.
+    def iou(boxA, boxB):
+        # boxes are [x_min, y_min, x_max, y_max]
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+
+        interW = max(0.0, xB - xA)
+        interH = max(0.0, yB - yA)
+        interArea = interW * interH
+
+        boxAArea = max(0.0, boxA[2] - boxA[0]) * max(0.0, boxA[3] - boxA[1])
+        boxBArea = max(0.0, boxB[2] - boxB[0]) * max(0.0, boxB[3] - boxB[1])
+
+        union = boxAArea + boxBArea - interArea
+        if union <= 0:
+            return 0.0
+        return interArea / union
+
+    def match_counts(ref_boxes, other_boxes, iou_threshold=0.5):
+        # Greedy matching by IoU
+        if not ref_boxes or not other_boxes:
+            return 0, []
+        ref_idx = list(range(len(ref_boxes)))
+        oth_idx = list(range(len(other_boxes)))
+        matches = []
+        # compute all IoUs
+        iou_matrix = []
+        for i, rb in enumerate(ref_boxes):
+            row = []
+            for j, ob in enumerate(other_boxes):
+                row.append(iou(rb, ob))
+            iou_matrix.append(row)
+
+        iou_matrix = np.array(iou_matrix)
+        while True:
+            if iou_matrix.size == 0:
+                break
+            # find best remaining pair
+            idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
+            best_i, best_j = idx[0], idx[1]
+            best_val = iou_matrix[best_i, best_j]
+            if best_val < iou_threshold:
+                break
+            matches.append((ref_idx[best_i], oth_idx[best_j], float(best_val)))
+            # remove matched row and column
+            iou_matrix = np.delete(iou_matrix, best_i, axis=0)
+            iou_matrix = np.delete(iou_matrix, best_j, axis=1)
+            del ref_idx[best_i]
+            del oth_idx[best_j]
+
+        return len(matches), matches
+
+    # canonical reference: first run (if any)
+    stability_scores = []
+    avg_ious = []
+    if len(detections_list) == 0:
+        stability_avg = 0.0
+    else:
+        ref = detections_list[0]
+        # extract boxes list-of-lists
+        print(ref)
+        ref_boxes = [d['box'] for d in ref]
+        for run_idx, run in enumerate(detections_list):
+            other_boxes = [d['box'] for d in run]
+            matched_count, matches = match_counts(ref_boxes, other_boxes, iou_threshold=0.5)
+            denom = max(len(ref_boxes), len(other_boxes), 1)
+            score = matched_count / denom
+            stability_scores.append(score)
+            if matches:
+                avg_ious.append(sum(m for (_, _, m) in matches) / len(matches))
+
+        stability_avg = float(np.mean(stability_scores)) if stability_scores else 0.0
+        stability_std = float(np.std(stability_scores)) if stability_scores else 0.0
+        median_stability = float(np.median(stability_scores)) if stability_scores else 0.0
+        avg_iou_over_matches = float(np.mean(avg_ious)) if avg_ious else 0.0
+
+    # Heuristic for recommended pixel offset to treat boxes as identical
+    # Use median box dimension across all detections and suggest a small fraction
+    all_widths = []
+    all_heights = []
+    for run in detections_list:
+        for d in run:
+            b = d['box']
+            w = abs(b[2] - b[0])
+            h = abs(b[3] - b[1])
+            all_widths.append(w)
+            all_heights.append(h)
+
+    if all_widths and all_heights:
+        med_w = float(np.median(all_widths))
+        med_h = float(np.median(all_heights))
+        # pixel suggestion: 5px absolute, and also ~5% of median min dimension
+        suggestion_px = max(5.0, min(med_w, med_h) * 0.05)
+        suggestion_px_rounded = int(round(suggestion_px))
+    else:
+        med_w = med_h = 0.0
+        suggestion_px_rounded = 5
+
+    # Additional check: if we expand each box by suggestion_px_rounded (on all sides),
+    # would that cause every run to fully match the reference (i.e., every box in
+    # each run matches some reference box and vice-versa using the same IoU threshold)?
+    def expand_box(box, px, img_w=None, img_h=None):
+        # box: [x_min, y_min, x_max, y_max]
+        x0, y0, x1, y1 = box
+        x0 -= px
+        y0 -= px
+        x1 += px
+        y1 += px
+        if img_w is not None and img_h is not None:
+            x0 = max(0, x0)
+            y0 = max(0, y0)
+            x1 = min(img_w, x1)
+            y1 = min(img_h, y1)
+        return [x0, y0, x1, y1]
+
+    def all_boxes_match_after_expansion(ref_boxes, other_boxes, px_expand, iou_threshold=0.5):
+        # Expand both sets and perform greedy matching. True if both sets are fully matched.
+        if not ref_boxes and not other_boxes:
+            return True
+        if not ref_boxes or not other_boxes:
+            return False
+
+        # Expand boxes
+        ref_exp = [expand_box(b, px_expand) for b in ref_boxes]
+        oth_exp = [expand_box(b, px_expand) for b in other_boxes]
+
+        # compute IoU matrix
+        mat = np.zeros((len(ref_exp), len(oth_exp)), dtype=float)
+        for i, rb in enumerate(ref_exp):
+            for j, ob in enumerate(oth_exp):
+                mat[i, j] = iou(rb, ob)
+
+        # greedy match
+        ref_idx = list(range(len(ref_exp)))
+        oth_idx = list(range(len(oth_exp)))
+        matches = 0
+        m = mat.copy()
+        while m.size:
+            idx = np.unravel_index(np.argmax(m), m.shape)
+            best_i, best_j = idx[0], idx[1]
+            best_val = m[best_i, best_j]
+            if best_val < iou_threshold:
+                break
+            matches += 1
+            m = np.delete(m, best_i, axis=0)
+            m = np.delete(m, best_j, axis=1)
+            del ref_idx[best_i]
+            del oth_idx[best_j]
+
+        # Fully matched if matches equals both lengths
+        return (matches == len(ref_exp)) and (matches == len(oth_exp))
+
+    would_treat_all_same = False
+    per_run_expanded_match = []
+    try:
+        if len(detections_list) == 0:
+            would_treat_all_same = False
+        else:
+            ref = detections_list[0]
+            ref_boxes = [d['box'] for d in ref]
+            for run in detections_list:
+                other_boxes = [d['box'] for d in run]
+                matched = all_boxes_match_after_expansion(ref_boxes, other_boxes, suggestion_px_rounded, iou_threshold=0.5)
+                per_run_expanded_match.append(bool(matched))
+            would_treat_all_same = all(per_run_expanded_match) if per_run_expanded_match else False
+    except Exception:
+        would_treat_all_same = False
+
+    # Print results
+    print(f"Average processing time over {runs} runs: {avg_time:.4f} seconds")
+    print("--- Stability summary (reference = first run) ---")
+    if len(detections_list) == 0:
+        print("No detections recorded.")
+    else:
+        print(f"Per-run similarity ratios vs first run: {[round(s,3) for s in stability_scores]}")
+        print(f"Stability average: {stability_avg:.4f}, std: {stability_std:.4f}, median: {median_stability:.4f}")
+        print(f"Average IoU (matched boxes): {avg_iou_over_matches:.4f}")
+        print(f"Median box size (w x h): {med_w:.1f} x {med_h:.1f} px")
+        print(f"Recommended pixel-offset heuristic to treat boxes as identical: {suggestion_px_rounded} px (~5% of median box min-dim).")
+        print(f"Per-run fully-matched after expanding by {suggestion_px_rounded}px: {per_run_expanded_match}")
+        print(f"Would the recommendation treat all runs as identical? {would_treat_all_same}")
+        print("Also consider fixed offsets like 5px or 10px depending on image DPI and scaling.")
+
+
+    # Draw and save the last-run detections for inspection
+    if pil_img:
+        image_path = os.path.join(os.getcwd(), "last_frame_for_detections.png")
+        pil_img.save(image_path)
+    try:
+        src_img = cv2.imread(image_path)
+        if src_img is not None:
+            res_img = draw_detections(image=src_img, detections=detections, model_name=meiki.model_name)
+            out_path = Path(image_path).with_name(f"detection_result_{meiki.model_name}.png")
+            cv2.imwrite(str(out_path), res_img)
+            print(f"Saved detection visualization to: {out_path}")
+        else:
+            print(f"Could not read image for visualization: {image_path}")
+    except Exception as e:
+        print(f"Error drawing/saving detections: {e}")
+
+    # print(f"Average processing time over {runs} runs: {avg_time:.4f} seconds")
+
+    # if detector.available:
+    #     # Example image URL
+    #     # image_url = "https://huggingface.co/rtr46/meiki.text.detect.v0/resolve/main/test_images/manga.jpg"
+    #     # image_url = "https://huggingface.co/rtr46/meiki.text.detect.v0/resolve/main/test_images/sign.jpg"
+        
+    #     print(f"\nProcessing image from URL: {image_url}")
+        
+    #     # The __call__ method handles the URL directly
+    #     detections = detector(image_url, confidence_threshold=0.4)
+
+    #     # Print the results
+    #     print("\nDetections:")
+    #     for det in detections:
+    #         # Formatting the box coordinates to 2 decimal places for cleaner printing
+    #         formatted_box = [f"{coord:.2f}" for coord in det['box']]
+    #         print(f"  - Box: {formatted_box}, Score: {det['score']:.4f}")
+
+    #     # --- Visualization ---
+    #     print("\nVisualizing results... Check for a window named 'Detection Result'.")
+    #     # Load image again for drawing
+    #     response = requests.get(image_url)
+    #     pil_img = Image.open(BytesIO(response.content)).convert("RGB")
+    #     original_image_np = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    #     # Use the helper function to draw the detections
+    #     result_image = draw_detections(original_image_np, detections, detector.model_name)
+
+    #     # Save or display the image
+    #     output_path = "detection_result.jpg"
+    #     cv2.imwrite(output_path, result_image)
+    #     print(f"Result saved to {output_path}")
+
+    #     # To display in a window (press any key to close)
+    #     # cv2.imshow("Detection Result", result_image)
+    #     # cv2.waitKey(0)
+    #     # cv2.destroyAllWindows()
+    # else:
+    #     print("\nDetector could not be initialized. Please check the error messages above.")
+
 
 # class QWENOCR:
 #     name = 'qwenv2'

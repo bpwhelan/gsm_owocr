@@ -1392,6 +1392,13 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
     # print(engine_index)
 
     if res:
+        if 'provider' in text:
+            if write_to == 'callback':
+                logger.opt(ansi=True).info(f"{len(text['boxes'])} text boxes recognized using Meiki:")
+                txt_callback('', '', ocr_start_time,
+                             img_or_path, is_second_ocr, filtering, text.get('crop_coords', None), meiki_boxes=text.get('boxes', []))
+                return str(text), str(text)
+        
         if isinstance(text, list):
             for i, line in enumerate(text):
                 text[i] = do_configured_ocr_replacements(line)
