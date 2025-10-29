@@ -1038,7 +1038,8 @@ class OBSScreenshotThread(threading.Thread):
     def init_config(self, source=None, scene=None):
         import GameSentenceMiner.obs as obs
         obs.update_current_game()
-        self.current_source = source if source else obs.get_active_source()
+        current_sources = obs.get_active_video_sources()
+        self.current_source = source if source else obs.get_best_source_for_screenshot()
         logger.debug(f"Current OBS source: {self.current_source}")
         self.source_width = self.current_source.get(
             "sceneItemTransform").get("sourceWidth") or self.width
@@ -1056,6 +1057,8 @@ class OBSScreenshotThread(threading.Thread):
                 f"Using source dimensions: {self.width}x{self.height}")
         self.current_source_name = self.current_source.get(
             "sourceName") or None
+        if len(current_sources) > 1:
+            logger.error(f"Multiple active video sources found in OBS. Using {self.current_source_name} for Screenshot. Please ensure only one source is active for best results.")
         self.current_scene = scene if scene else obs.get_current_game()
         self.ocr_config = get_scene_ocr_config(refresh=True)
         if not self.ocr_config:
@@ -1394,7 +1397,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
     if res:
         if 'provider' in text:
             if write_to == 'callback':
-                logger.opt(ansi=True).info(f"{len(text['boxes'])} text boxes recognized using Meiki:")
+                logger.opt(ansi=True).info(f"{len(text['boxes'])} text boxes recognized in {end_time - start_time:0.03f}s using Meiki:")
                 txt_callback('', '', ocr_start_time,
                              img_or_path, is_second_ocr, filtering, text.get('crop_coords', None), meiki_boxes=text.get('boxes', []))
                 return str(text), str(text)
