@@ -1595,7 +1595,7 @@ class MeikiTextDetector:
     available = False
     key = ']'
 
-    def __init__(self, model_name: str = 'tiny'):
+    def __init__(self, model_name: str = 'small'):
         """
         Initializes the detector by downloading and loading the specified ONNX model.
 
@@ -1606,7 +1606,7 @@ class MeikiTextDetector:
         if model_name not in ['tiny', 'small']:
             raise ValueError("model_name must be either 'tiny' or 'small'")
         
-        ort.preload_dlls(cuda=True, directory=None)
+        ort.preload_dlls(cuda=False, cudnn=False, directory=None)
 
         self.model_name = model_name
         self.session = None
