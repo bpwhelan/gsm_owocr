@@ -10,6 +10,7 @@ from math import sqrt, floor
 import json
 import base64
 from urllib.parse import urlparse, parse_qs
+import warnings
 
 import numpy as np
 import rapidfuzz.fuzz
@@ -98,6 +99,13 @@ try:
     optimized_png_encode = True
 except:
     optimized_png_encode = False
+
+try:
+    from meikiocr import MeikiOCR as MKOCR
+except ImportError:
+    pass
+
+meiki_model = None
 
 
 def empty_post_process(text):
@@ -1079,6 +1087,250 @@ class OneOCR:
 
     def _preprocess(self, img):
         return pil_image_to_bytes(img, png_compression=1)
+    
+
+class MeikiOCR:
+    name = 'meikiocr'
+    readable_name = 'MeikiOCR'
+    key = 'k'
+    available = False
+
+    def __init__(self, config={}, lang='ja', get_furigana_sens_from_file=True):
+        global meiki_model
+        import regex
+        self.initial_lang = lang
+        self.regex = get_regex(lang)
+        self.punctuation_regex = regex.compile(r'[\p{P}\p{S}]')
+        self.get_furigana_sens_from_file = get_furigana_sens_from_file
+        if 'meikiocr' not in sys.modules:
+            logger.warning('meikiocr not available, MeikiOCR will not work!')
+        elif meiki_model:
+            self.model = meiki_model
+            self.available = True
+            logger.info('MeikiOCR ready')
+        else:
+            try:
+                logger.info('Loading MeikiOCR model')
+                meiki_model = MKOCR()
+                self.model = meiki_model
+                self.available = True
+                logger.info('MeikiOCR ready')
+            except RuntimeError as e:
+                logger.warning(str(e) + ', MeikiOCR will not work!')
+            except Exception as e:
+                logger.warning(f'Error loading MeikiOCR: {e}, MeikiOCR will not work!')
+
+    def get_regex(self, lang):
+        if lang == "ja":
+            self.regex = re.compile(r'[\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]')
+        elif lang == "zh":
+            self.regex = re.compile(r'[\u4E00-\u9FFF]')
+        elif lang == "ko":
+            self.regex = re.compile(r'[\uAC00-\uD7AF]')
+        elif lang == "ar":
+            self.regex = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+        elif lang == "ru":
+            self.regex = re.compile(r'[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u1C80-\u1C8F]')
+        elif lang == "el":
+            self.regex = re.compile(r'[\u0370-\u03FF\u1F00-\u1FFF]')
+        elif lang == "he":
+            self.regex = re.compile(r'[\u0590-\u05FF\uFB1D-\uFB4F]')
+        elif lang == "th":
+            self.regex = re.compile(r'[\u0E00-\u0E7F]')
+        else:
+            self.regex = re.compile(
+            r'[a-zA-Z\u00C0-\u00FF\u0100-\u017F\u0180-\u024F\u0250-\u02AF\u1D00-\u1D7F\u1D80-\u1DBF\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\uAB30-\uAB6F]')
+
+    def __call__(self, img, furigana_filter_sensitivity=0, return_coords=False, multiple_crop_coords=False, return_one_box=True, return_dict=False):
+        lang = get_ocr_language()
+        if self.get_furigana_sens_from_file:
+            furigana_filter_sensitivity = get_furigana_filter_sensitivity()
+        else:
+            furigana_filter_sensitivity = furigana_filter_sensitivity
+        if lang != self.initial_lang:
+            self.initial_lang = lang
+            self.regex = get_regex(lang)
+        img, is_path = input_to_pil_image(img)
+        if img.width < 51 or img.height < 51:
+            new_width = max(img.width, 51)
+            new_height = max(img.height, 51)
+            new_img = Image.new("RGBA", (new_width, new_height), (0, 0, 0, 0))
+            new_img.paste(img, ((new_width - img.width) // 2, (new_height - img.height) // 2))
+            img = new_img
+        if not img:
+            return (False, 'Invalid image provided')
+        crop_coords = None
+        crop_coords_list = []
+        ocr_resp = ''
+        
+        try:
+            # Convert PIL image to numpy array for meikiocr
+            image_np = np.array(img.convert('RGB'))[:, :, ::-1]
+            
+            # Run meikiocr
+            read_results = self.model.run_ocr(image_np)
+            
+            # Convert meikiocr response to OneOCR format
+            ocr_resp = self._convert_meikiocr_to_oneocr_format(read_results, img.width, img.height)
+            
+            if os.path.exists(os.path.expanduser("~/GSM/temp")):
+                with open(os.path.join(os.path.expanduser("~/GSM/temp"), 'meikiocr_response.json'), 'w',
+                            encoding='utf-8') as f:
+                    json.dump(ocr_resp, f, indent=4, ensure_ascii=False)
+            
+            filtered_lines = [line for line in ocr_resp['lines'] if self.regex.search(line['text'])]
+            x_coords = [line['bounding_rect'][f'x{i}'] for line in filtered_lines for i in range(1, 5)]
+            y_coords = [line['bounding_rect'][f'y{i}'] for line in filtered_lines for i in range(1, 5)]
+            if x_coords and y_coords:
+                crop_coords = (min(x_coords) - 5, min(y_coords) - 5, max(x_coords) + 5, max(y_coords) + 5)
+            
+            res = ''
+            skipped = []
+            boxes = []
+            if furigana_filter_sensitivity > 0:
+                passing_lines = []
+                for line in filtered_lines:
+                    line_x1, line_x2, line_x3, line_x4 = line['bounding_rect']['x1'], line['bounding_rect']['x2'], \
+                        line['bounding_rect']['x3'], line['bounding_rect']['x4']
+                    line_y1, line_y2, line_y3, line_y4 = line['bounding_rect']['y1'], line['bounding_rect']['y2'], \
+                        line['bounding_rect']['y3'], line['bounding_rect']['y4']
+                    line_width = max(line_x2 - line_x1, line_x3 - line_x4)
+                    line_height = max(line_y3 - line_y1, line_y4 - line_y2)
+                    
+                    # Check if the line passes the size filter
+                    if line_width > furigana_filter_sensitivity and line_height > furigana_filter_sensitivity:
+                        # Line passes - include all its text and add to passing_lines
+                        for char in line['words']:
+                            res += char['text']
+                        passing_lines.append(line)
+                    else:
+                        # Line fails - only include punctuation, skip the rest
+                        for char in line['words']:
+                            skipped.extend(char for char in line['text'])
+                    res += '\n'
+                filtered_lines = passing_lines
+                return_resp = {'text': res, 'text_angle': ocr_resp['text_angle'], 'lines': passing_lines}
+            else:
+                res = ocr_resp['text']
+                return_resp = ocr_resp
+                
+            if multiple_crop_coords:
+                for line in filtered_lines:
+                    crop_coords_list.append(
+                        (line['bounding_rect']['x1'] - 5, line['bounding_rect']['y1'] - 5,
+                         line['bounding_rect']['x3'] + 5, line['bounding_rect']['y3'] + 5))
+
+        except RuntimeError as e:
+            return (False, str(e))
+        except Exception as e:
+            return (False, f'MeikiOCR error: {str(e)}')
+
+        x = [True, res]
+        if return_coords:
+            x.append(filtered_lines)
+        if multiple_crop_coords:
+            x.append(crop_coords_list)
+        if return_one_box:
+            x.append(crop_coords)
+        if return_dict:
+            x.append(return_resp)
+        if is_path:
+            img.close()
+        return x
+
+    def _convert_meikiocr_to_oneocr_format(self, meikiocr_results, img_width, img_height):
+        """
+        Convert meikiocr output format to match OneOCR format.
+        
+        meikiocr returns: [{"text": "line text", "chars": [{"char": "字", "bbox": [x1, y1, x2, y2], "conf": 0.9}, ...]}, ...]
+        
+        OneOCR format expected:
+        {
+            'text': 'full text',
+            'text_angle': 0,
+            'lines': [
+                {
+                    'text': 'line text',
+                    'bounding_rect': {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'x3': x3, 'y3': y3, 'x4': x4, 'y4': y4},
+                    'words': [{'text': 'char', 'bounding_rect': {...}}, ...]
+                },
+                ...
+            ]
+        }
+        """
+        full_text = ''
+        lines = []
+        
+        for line_result in meikiocr_results:
+            line_text = line_result.get('text', '')
+            char_results = line_result.get('chars', [])
+            
+            if not line_text or not char_results:
+                continue
+            
+            # Convert characters and calculate line bbox from char bboxes
+            words = []
+            all_x_coords = []
+            all_y_coords = []
+            
+            for char_info in char_results:
+                char_text = char_info.get('char', '')
+                char_bbox = char_info.get('bbox', [0, 0, 0, 0])
+                
+                cx1, cy1, cx2, cy2 = char_bbox
+                all_x_coords.extend([cx1, cx2])
+                all_y_coords.extend([cy1, cy2])
+                
+                char_bounding_rect = {
+                    'x1': cx1, 'y1': cy1,
+                    'x2': cx2, 'y2': cy1,
+                    'x3': cx2, 'y3': cy2,
+                    'x4': cx1, 'y4': cy2
+                }
+                
+                words.append({
+                    'text': char_text,
+                    'bounding_rect': char_bounding_rect
+                })
+            
+            # Calculate line bounding box from all character bboxes
+            if all_x_coords and all_y_coords:
+                x1 = min(all_x_coords)
+                y1 = min(all_y_coords)
+                x2 = max(all_x_coords)
+                y2 = max(all_y_coords)
+                
+                line_bounding_rect = {
+                    'x1': x1, 'y1': y1,
+                    'x2': x2, 'y2': y1,
+                    'x3': x2, 'y3': y2,
+                    'x4': x1, 'y4': y2
+                }
+            else:
+                line_bounding_rect = {
+                    'x1': 0, 'y1': 0,
+                    'x2': 0, 'y2': 0,
+                    'x3': 0, 'y3': 0,
+                    'x4': 0, 'y4': 0
+                }
+            
+            lines.append({
+                'text': line_text,
+                'bounding_rect': line_bounding_rect,
+                'words': words
+            })
+            
+            full_text += line_text + '\n'
+        
+        return {
+            'text': full_text.rstrip('\n'),
+            'text_angle': 0,
+            'lines': lines
+        }
+
+    def _preprocess(self, img):
+        return pil_image_to_bytes(img, png_compression=1)
+
 
 class AzureImageAnalysis:
     name = 'azure'
@@ -1584,11 +1836,10 @@ def draw_detections(image: np.ndarray, detections: list, model_name: str) -> np.
 
 class MeikiTextDetector:
     """
-    A class to perform text detection using the meiki.text.detect.v0 models.
+    A class to perform text detection using the meikiocr package.
     
-    This class handles downloading the ONNX models from the Hugging Face Hub,
-    loading them into an ONNX Runtime session, and providing a simple interface
-    for inference.
+    This class wraps the MeikiOCR.run_detection method and provides
+    the same output format as the previous implementation.
     """
     name = 'meiki_text_detector'
     readable_name = 'Meiki Text Detector'
@@ -1597,163 +1848,79 @@ class MeikiTextDetector:
 
     def __init__(self, model_name: str = 'small'):
         """
-        Initializes the detector by downloading and loading the specified ONNX model.
+        Initializes the detector using the meikiocr package.
 
         Args:
-            model_name (str): The model to use, either "tiny" or "small". 
-                              Defaults to "small".
+            model_name (str): Not used in the new implementation (meikiocr uses its own model).
+                              Kept for compatibility.
         """
-        if model_name not in ['tiny', 'small']:
-            raise ValueError("model_name must be either 'tiny' or 'small'")
-        
-        ort.preload_dlls(cuda=False, cudnn=False, directory=None)
-
-        self.model_name = model_name
-        self.session = None
-        
-        # --- Model-specific parameters ---
-        if self.model_name == "tiny":
-            self.model_size = 320
-            self.is_color = False
-            self.onnx_filename = "meiki.text.detect.tiny.v0.onnx"
-        else: # "small"
-            self.model_size = 640
-            self.is_color = True
-            self.onnx_filename = "meiki.text.detect.small.v0.onnx"
-
+        global meiki_model
         try:
-            print(f"Initializing MeikiTextDetector with '{self.model_name}' model...")
-            MODEL_REPO = "rtr46/meiki.text.detect.v0"
-            
-            # Download the model file from the Hub and get its local path
-            model_path = hf_hub_download(repo_id=MODEL_REPO, filename=self.onnx_filename)
-            
-            # Load the ONNX model into an inference session
-            # providers = ['CUDAExecutionProvider']
-            providers = ['CPUExecutionProvider']
-            self.session = ort.InferenceSession(model_path, providers=providers)
-            
-            self.available = True
-            print("Model loaded successfully. MeikiTextDetector is ready.")
-            
+            if 'meikiocr' not in sys.modules:
+                logger.warning('meikiocr not available, MeikiTextDetector will not work!')
+                self.available = False
+                return
+            elif meiki_model:
+                self.model = meiki_model
+                self.available = True
+                logger.info('MeikiOCR ready')
+            else:
+                logger.info('Initializing MeikiTextDetector using meikiocr package...')
+                meiki_model = MKOCR()
+                self.model = meiki_model
+                self.available = True
+                logger.info('MeikiTextDetector ready')
         except Exception as e:
-            print(f"Error initializing MeikiTextDetector: {e}")
+            logger.warning(f'Error initializing MeikiTextDetector: {e}')
             self.available = False
-
-    def _resize_and_pad(self, image: np.ndarray):
-        """ 
-        Resizes and pads an image to the model's expected square size,
-        preserving the aspect ratio.
-        """
-        if self.is_color:
-            h, w, _ = image.shape
-        else:
-            h, w = image.shape
-
-        size = self.model_size
-        ratio = min(size / w, size / h)
-        new_w, new_h = int(w * ratio), int(h * ratio)
-        
-        resized_image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        
-        if self.is_color:
-            padded_image = np.zeros((size, size, 3), dtype=np.uint8)
-        else:
-            padded_image = np.zeros((size, size), dtype=np.uint8)
-            
-        pad_w, pad_h = (size - new_w) // 2, (size - new_h) // 2
-        padded_image[pad_h:pad_h + new_h, pad_w:pad_w + new_w] = resized_image
-        
-        return padded_image, ratio, pad_w, pad_h
 
     def __call__(self, img, confidence_threshold: float = 0.4):
         """
         Performs text detection on an input image.
 
         Args:
-            img: The input image. Can be a file path, URL, PIL Image, or a NumPy array (BGR format).
+            img: The input image. Can be a PIL Image or a NumPy array (BGR format).
             confidence_threshold (float): The threshold to filter out low-confidence detections.
 
         Returns:
-            A list of dictionaries, where each dictionary represents a detected
-            text box and contains 'box' (a list of [x_min, y_min, x_max, y_max])
-            and 'score' (a float). Returns an empty list if no boxes are found.
+            A tuple of (True, dict) where dict contains:
+                - 'boxes': list of detection dicts with 'box' and 'score'
+                - 'provider': 'meiki'
+                - 'crop_coords': bounding box around all detections
         """
         if confidence_threshold is None:
             confidence_threshold = 0.4
         if not self.available:
             raise RuntimeError("MeikiTextDetector is not available due to an initialization error.")
 
-        # --- Input Handling ---
-        if isinstance(img, str):
-            if img.startswith('http'):
-                response = requests.get(img)
-                pil_image = Image.open(BytesIO(response.content)).convert("RGB")
-            else:
-                pil_image = Image.open(img).convert("RGB")
-            # Convert PIL (RGB) to OpenCV (BGR) format
-            input_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-        elif isinstance(img, Image.Image):
-             # Convert PIL (RGB) to OpenCV (BGR) format
-            input_image = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
-        elif isinstance(img, np.ndarray):
-            input_image = img
-        else:
-            raise TypeError("Unsupported input type for 'img'. Use a file path, URL, PIL Image, or NumPy array.")
-
-
-        # --- Preprocessing ---
-        if self.is_color:
-            image_for_model = input_image
-        else:
-            image_for_model = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
-            
-        padded_image, ratio, pad_w, pad_h = self._resize_and_pad(image_for_model)
-        img_normalized = padded_image.astype(np.float32) / 255.0
-
-        if self.is_color:
-            img_transposed = np.transpose(img_normalized, (2, 0, 1))
-            input_tensor = np.expand_dims(img_transposed, axis=0)
-        else:
-            input_tensor = np.expand_dims(np.expand_dims(img_normalized, axis=0), axis=0)
-
-        # --- Inference ---
-        sizes_tensor = np.array([[self.model_size, self.model_size]], dtype=np.int64)
-        input_names = [inp.name for inp in self.session.get_inputs()]
-        inputs = {input_names[0]: input_tensor, input_names[1]: sizes_tensor}
+        # Convert input to numpy array (BGR format)
+        img_pil, is_path = input_to_pil_image(img)
+        if not img_pil:
+            return False, {'boxes': [], 'provider': 'meiki', 'crop_coords': None}
         
-        outputs = self.session.run(None, inputs)
+        # Convert PIL to OpenCV BGR format
+        input_image = np.array(img_pil.convert('RGB'))[:, :, ::-1]
         
-        # print(outputs)
-
-        # --- Post-processing ---
-        if self.model_name == "tiny":
-            boxes = outputs[0]
-            scores = [1.0] * len(boxes) # Tiny model doesn't output scores
-        else: # "small"
-            _, boxes, scores = outputs
-            boxes, scores = boxes[0], scores[0]
+        # Run detection using meikiocr
+        try:
+            text_boxes = self.model.run_detection(input_image, conf_threshold=confidence_threshold)
+        except Exception as e:
+            logger.error(f'MeikiTextDetector error: {e}')
+            return False, {'boxes': [], 'provider': 'meiki', 'crop_coords': None}
         
+        # Convert meikiocr format to expected output format
+        # meikiocr returns: [{'bbox': [x1, y1, x2, y2]}, ...]
+        # we need: [{'box': [x1, y1, x2, y2], 'score': float}, ...]
         detections = []
-        for box, score in zip(boxes, scores):
-            if score < confidence_threshold:
-                continue
-            
-            x_min, y_min, x_max, y_max = box
-            
-            # Rescale box coordinates to the original image size
-            final_x_min = (x_min - pad_w) / ratio
-            final_y_min = (y_min - pad_h) / ratio
-            final_x_max = (x_max - pad_w) / ratio
-            final_y_max = (y_max - pad_h) / ratio
-            
+        for text_box in text_boxes:
+            bbox = text_box.get('bbox', [0, 0, 0, 0])
+            # meikiocr doesn't return confidence scores from run_detection
+            # so we use 1.0 as a placeholder (detection already passed threshold)
             detections.append({
-                "box": [final_x_min, final_y_min, final_x_max, final_y_max],
-                "score": float(score)
+                "box": [float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])],
+                "score": 1.0
             })
-            
-        # print(f"Processed with '{self.model_name}' model. Found {len(detections)} boxes with confidence > {confidence_threshold}.")
-
+        
         # Compute crop_coords as padded min/max of all detected boxes
         if detections:
             x_mins = [b['box'][0] for b in detections]
@@ -1783,6 +1950,9 @@ class MeikiTextDetector:
             "provider": 'meiki',
             "crop_coords": crop_coords
         }
+        
+        if is_path:
+            img_pil.close()
 
         return True, resp
 

@@ -1420,7 +1420,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
                 return orig_text, ''
             
         logger.opt(ansi=True).info(
-    f'Text recognized in {end_time - start_time:0.03f}s using <{engine_color}>{engine_instance.readable_name}</{engine_color}>: {text}')
+    f'OCR Run {1 if not is_second_ocr else 2}: Text recognized in {end_time - start_time:0.03f}s using <{engine_color}>{engine_instance.readable_name}</{engine_color}>: {text}')
 
         if write_to == 'websocket':
             websocket_server_thread.send_text(text)
