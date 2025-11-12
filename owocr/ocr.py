@@ -591,6 +591,7 @@ class Bing:
 
     def __init__(self, lang='ja'):
         self.requests_session = requests.Session()
+        self.requests_session.proxies={"http": None, "https": None}
         self.available = True
         logger.info('Bing ready')
 
@@ -1959,287 +1960,293 @@ class MeikiTextDetector:
 
 # --- EXAMPLE USAGE ---
 if __name__ == '__main__':
-    import datetime
-    # You can choose 'tiny' or 'small' here
-    meiki = MeikiTextDetector(model_name='small')
-    # Example: run a short warm-up then measure average over N runs
-    image_path = r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\lotsofsmalltext.png"
-    video_path = r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\tanetsumi_CdACfZkwMY.mp4"
-    # Warm-up run (helps with any one-time setup cost)
-    try:
-        _ = meiki(image_path, confidence_threshold=0.4)
-    except Exception as e:
-        print(f"Error running MeikiTextDetector on warm-up: {e}")
-        raise
-
-    # runs = 500
-    times = []
-    detections_list = []
-    # for i in range(runs):
-    #     start_time = datetime.datetime.now()
-    #     res, resp_dict = meiki(image_path, confidence_threshold=0.4)
-    #     detections = resp_dict['boxes']
-    #     dections_list.append(detections)
-    #     end_time = datetime.datetime.now()
-    #     times.append((end_time - start_time).total_seconds())
     
-    # Process video frame by frame with cv2 (sample at ~10 FPS)
-    cap = cv2.VideoCapture(video_path)
-    try:
-        src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    except Exception:
-        src_fps = 30.0
-
-    target_fps = 10
-    sample_interval = max(1, int(round(src_fps / target_fps)))
-    runs = 0
-    last_detections = []
-    pil_img = None
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        # Only process sampled frames
-        if runs % sample_interval == 0:
-            # Convert to PIL image
-            try:
-                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            except Exception:
-                runs += 1
-                continue
-
-            # Run Meiki detector on the full frame (or you can crop before passing)
-            start_t = time.time()
-            try:
-                ok, resp = meiki(pil_img, confidence_threshold=0.4)
-                if ok:
-                    detections = resp.get('boxes', [])
-                else:
-                    detections = []
-            except Exception as e:
-                # on error, record empty detections but keep going
-                detections = []
-            end_t = time.time()
-
-            times.append(end_t - start_t)
-            detections_list.append(detections)
-            last_detections = detections
-
-        runs += 1
-
-    cap.release()
-
-    # Make sure 'detections' variable exists for later visualization
-    detections = last_detections
-
-    avg_time = sum(times) / len(times) if times else 0.0
+    bing = Bing()
     
-    print(f"Average processing/inference time over {runs} runs: {avg_time:.4f} seconds")
+    re = bing(Image.open(r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\test_furigana.png"))
+    
+    print(re)
+    # import datetime
+    # # You can choose 'tiny' or 'small' here
+    # meiki = MeikiTextDetector(model_name='small')
+    # # Example: run a short warm-up then measure average over N runs
+    # image_path = r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\lotsofsmalltext.png"
+    # video_path = r"C:\Users\Beangate\GSM\GameSentenceMiner\GameSentenceMiner\owocr\owocr\tanetsumi_CdACfZkwMY.mp4"
+    # # Warm-up run (helps with any one-time setup cost)
+    # try:
+    #     _ = meiki(image_path, confidence_threshold=0.4)
+    # except Exception as e:
+    #     print(f"Error running MeikiTextDetector on warm-up: {e}")
+    #     raise
 
-    # --- Stability / similarity analysis across detection runs ---
-    # We consider two boxes the same if their IoU >= iou_threshold.
-    def iou(boxA, boxB):
-        # boxes are [x_min, y_min, x_max, y_max]
-        xA = max(boxA[0], boxB[0])
-        yA = max(boxA[1], boxB[1])
-        xB = min(boxA[2], boxB[2])
-        yB = min(boxA[3], boxB[3])
+    # # runs = 500
+    # times = []
+    # detections_list = []
+    # # for i in range(runs):
+    # #     start_time = datetime.datetime.now()
+    # #     res, resp_dict = meiki(image_path, confidence_threshold=0.4)
+    # #     detections = resp_dict['boxes']
+    # #     dections_list.append(detections)
+    # #     end_time = datetime.datetime.now()
+    # #     times.append((end_time - start_time).total_seconds())
+    
+    # # Process video frame by frame with cv2 (sample at ~10 FPS)
+    # cap = cv2.VideoCapture(video_path)
+    # try:
+    #     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    # except Exception:
+    #     src_fps = 30.0
 
-        interW = max(0.0, xB - xA)
-        interH = max(0.0, yB - yA)
-        interArea = interW * interH
+    # target_fps = 10
+    # sample_interval = max(1, int(round(src_fps / target_fps)))
+    # runs = 0
+    # last_detections = []
+    # pil_img = None
 
-        boxAArea = max(0.0, boxA[2] - boxA[0]) * max(0.0, boxA[3] - boxA[1])
-        boxBArea = max(0.0, boxB[2] - boxB[0]) * max(0.0, boxB[3] - boxB[1])
+    # while True:
+    #     ret, frame = cap.read()
+    #     if not ret:
+    #         break
 
-        union = boxAArea + boxBArea - interArea
-        if union <= 0:
-            return 0.0
-        return interArea / union
+    #     # Only process sampled frames
+    #     if runs % sample_interval == 0:
+    #         # Convert to PIL image
+    #         try:
+    #             pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    #         except Exception:
+    #             runs += 1
+    #             continue
 
-    def match_counts(ref_boxes, other_boxes, iou_threshold=0.5):
-        # Greedy matching by IoU
-        if not ref_boxes or not other_boxes:
-            return 0, []
-        ref_idx = list(range(len(ref_boxes)))
-        oth_idx = list(range(len(other_boxes)))
-        matches = []
-        # compute all IoUs
-        iou_matrix = []
-        for i, rb in enumerate(ref_boxes):
-            row = []
-            for j, ob in enumerate(other_boxes):
-                row.append(iou(rb, ob))
-            iou_matrix.append(row)
+    #         # Run Meiki detector on the full frame (or you can crop before passing)
+    #         start_t = time.time()
+    #         try:
+    #             ok, resp = meiki(pil_img, confidence_threshold=0.4)
+    #             if ok:
+    #                 detections = resp.get('boxes', [])
+    #             else:
+    #                 detections = []
+    #         except Exception as e:
+    #             # on error, record empty detections but keep going
+    #             detections = []
+    #         end_t = time.time()
 
-        iou_matrix = np.array(iou_matrix)
-        while True:
-            if iou_matrix.size == 0:
-                break
-            # find best remaining pair
-            idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
-            best_i, best_j = idx[0], idx[1]
-            best_val = iou_matrix[best_i, best_j]
-            if best_val < iou_threshold:
-                break
-            matches.append((ref_idx[best_i], oth_idx[best_j], float(best_val)))
-            # remove matched row and column
-            iou_matrix = np.delete(iou_matrix, best_i, axis=0)
-            iou_matrix = np.delete(iou_matrix, best_j, axis=1)
-            del ref_idx[best_i]
-            del oth_idx[best_j]
+    #         times.append(end_t - start_t)
+    #         detections_list.append(detections)
+    #         last_detections = detections
 
-        return len(matches), matches
+    #     runs += 1
 
-    # canonical reference: first run (if any)
-    stability_scores = []
-    avg_ious = []
-    if len(detections_list) == 0:
-        stability_avg = 0.0
-    else:
-        ref = detections_list[0]
-        # extract boxes list-of-lists
-        print(ref)
-        ref_boxes = [d['box'] for d in ref]
-        for run_idx, run in enumerate(detections_list):
-            other_boxes = [d['box'] for d in run]
-            matched_count, matches = match_counts(ref_boxes, other_boxes, iou_threshold=0.5)
-            denom = max(len(ref_boxes), len(other_boxes), 1)
-            score = matched_count / denom
-            stability_scores.append(score)
-            if matches:
-                avg_ious.append(sum(m for (_, _, m) in matches) / len(matches))
+    # cap.release()
 
-        stability_avg = float(np.mean(stability_scores)) if stability_scores else 0.0
-        stability_std = float(np.std(stability_scores)) if stability_scores else 0.0
-        median_stability = float(np.median(stability_scores)) if stability_scores else 0.0
-        avg_iou_over_matches = float(np.mean(avg_ious)) if avg_ious else 0.0
+    # # Make sure 'detections' variable exists for later visualization
+    # detections = last_detections
 
-    # Heuristic for recommended pixel offset to treat boxes as identical
-    # Use median box dimension across all detections and suggest a small fraction
-    all_widths = []
-    all_heights = []
-    for run in detections_list:
-        for d in run:
-            b = d['box']
-            w = abs(b[2] - b[0])
-            h = abs(b[3] - b[1])
-            all_widths.append(w)
-            all_heights.append(h)
+    # avg_time = sum(times) / len(times) if times else 0.0
+    
+    # print(f"Average processing/inference time over {runs} runs: {avg_time:.4f} seconds")
 
-    if all_widths and all_heights:
-        med_w = float(np.median(all_widths))
-        med_h = float(np.median(all_heights))
-        # pixel suggestion: 5px absolute, and also ~5% of median min dimension
-        suggestion_px = max(5.0, min(med_w, med_h) * 0.05)
-        suggestion_px_rounded = int(round(suggestion_px))
-    else:
-        med_w = med_h = 0.0
-        suggestion_px_rounded = 5
+    # # --- Stability / similarity analysis across detection runs ---
+    # # We consider two boxes the same if their IoU >= iou_threshold.
+    # def iou(boxA, boxB):
+    #     # boxes are [x_min, y_min, x_max, y_max]
+    #     xA = max(boxA[0], boxB[0])
+    #     yA = max(boxA[1], boxB[1])
+    #     xB = min(boxA[2], boxB[2])
+    #     yB = min(boxA[3], boxB[3])
 
-    # Additional check: if we expand each box by suggestion_px_rounded (on all sides),
-    # would that cause every run to fully match the reference (i.e., every box in
-    # each run matches some reference box and vice-versa using the same IoU threshold)?
-    def expand_box(box, px, img_w=None, img_h=None):
-        # box: [x_min, y_min, x_max, y_max]
-        x0, y0, x1, y1 = box
-        x0 -= px
-        y0 -= px
-        x1 += px
-        y1 += px
-        if img_w is not None and img_h is not None:
-            x0 = max(0, x0)
-            y0 = max(0, y0)
-            x1 = min(img_w, x1)
-            y1 = min(img_h, y1)
-        return [x0, y0, x1, y1]
+    #     interW = max(0.0, xB - xA)
+    #     interH = max(0.0, yB - yA)
+    #     interArea = interW * interH
 
-    def all_boxes_match_after_expansion(ref_boxes, other_boxes, px_expand, iou_threshold=0.5):
-        # Expand both sets and perform greedy matching. True if both sets are fully matched.
-        if not ref_boxes and not other_boxes:
-            return True
-        if not ref_boxes or not other_boxes:
-            return False
+    #     boxAArea = max(0.0, boxA[2] - boxA[0]) * max(0.0, boxA[3] - boxA[1])
+    #     boxBArea = max(0.0, boxB[2] - boxB[0]) * max(0.0, boxB[3] - boxB[1])
 
-        # Expand boxes
-        ref_exp = [expand_box(b, px_expand) for b in ref_boxes]
-        oth_exp = [expand_box(b, px_expand) for b in other_boxes]
+    #     union = boxAArea + boxBArea - interArea
+    #     if union <= 0:
+    #         return 0.0
+    #     return interArea / union
 
-        # compute IoU matrix
-        mat = np.zeros((len(ref_exp), len(oth_exp)), dtype=float)
-        for i, rb in enumerate(ref_exp):
-            for j, ob in enumerate(oth_exp):
-                mat[i, j] = iou(rb, ob)
+    # def match_counts(ref_boxes, other_boxes, iou_threshold=0.5):
+    #     # Greedy matching by IoU
+    #     if not ref_boxes or not other_boxes:
+    #         return 0, []
+    #     ref_idx = list(range(len(ref_boxes)))
+    #     oth_idx = list(range(len(other_boxes)))
+    #     matches = []
+    #     # compute all IoUs
+    #     iou_matrix = []
+    #     for i, rb in enumerate(ref_boxes):
+    #         row = []
+    #         for j, ob in enumerate(other_boxes):
+    #             row.append(iou(rb, ob))
+    #         iou_matrix.append(row)
 
-        # greedy match
-        ref_idx = list(range(len(ref_exp)))
-        oth_idx = list(range(len(oth_exp)))
-        matches = 0
-        m = mat.copy()
-        while m.size:
-            idx = np.unravel_index(np.argmax(m), m.shape)
-            best_i, best_j = idx[0], idx[1]
-            best_val = m[best_i, best_j]
-            if best_val < iou_threshold:
-                break
-            matches += 1
-            m = np.delete(m, best_i, axis=0)
-            m = np.delete(m, best_j, axis=1)
-            del ref_idx[best_i]
-            del oth_idx[best_j]
+    #     iou_matrix = np.array(iou_matrix)
+    #     while True:
+    #         if iou_matrix.size == 0:
+    #             break
+    #         # find best remaining pair
+    #         idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
+    #         best_i, best_j = idx[0], idx[1]
+    #         best_val = iou_matrix[best_i, best_j]
+    #         if best_val < iou_threshold:
+    #             break
+    #         matches.append((ref_idx[best_i], oth_idx[best_j], float(best_val)))
+    #         # remove matched row and column
+    #         iou_matrix = np.delete(iou_matrix, best_i, axis=0)
+    #         iou_matrix = np.delete(iou_matrix, best_j, axis=1)
+    #         del ref_idx[best_i]
+    #         del oth_idx[best_j]
 
-        # Fully matched if matches equals both lengths
-        return (matches == len(ref_exp)) and (matches == len(oth_exp))
+    #     return len(matches), matches
 
-    would_treat_all_same = False
-    per_run_expanded_match = []
-    try:
-        if len(detections_list) == 0:
-            would_treat_all_same = False
-        else:
-            ref = detections_list[0]
-            ref_boxes = [d['box'] for d in ref]
-            for run in detections_list:
-                other_boxes = [d['box'] for d in run]
-                matched = all_boxes_match_after_expansion(ref_boxes, other_boxes, suggestion_px_rounded, iou_threshold=0.5)
-                per_run_expanded_match.append(bool(matched))
-            would_treat_all_same = all(per_run_expanded_match) if per_run_expanded_match else False
-    except Exception:
-        would_treat_all_same = False
+    # # canonical reference: first run (if any)
+    # stability_scores = []
+    # avg_ious = []
+    # if len(detections_list) == 0:
+    #     stability_avg = 0.0
+    # else:
+    #     ref = detections_list[0]
+    #     # extract boxes list-of-lists
+    #     print(ref)
+    #     ref_boxes = [d['box'] for d in ref]
+    #     for run_idx, run in enumerate(detections_list):
+    #         other_boxes = [d['box'] for d in run]
+    #         matched_count, matches = match_counts(ref_boxes, other_boxes, iou_threshold=0.5)
+    #         denom = max(len(ref_boxes), len(other_boxes), 1)
+    #         score = matched_count / denom
+    #         stability_scores.append(score)
+    #         if matches:
+    #             avg_ious.append(sum(m for (_, _, m) in matches) / len(matches))
 
-    # Print results
-    print(f"Average processing time over {runs} runs: {avg_time:.4f} seconds")
-    print("--- Stability summary (reference = first run) ---")
-    if len(detections_list) == 0:
-        print("No detections recorded.")
-    else:
-        print(f"Per-run similarity ratios vs first run: {[round(s,3) for s in stability_scores]}")
-        print(f"Stability average: {stability_avg:.4f}, std: {stability_std:.4f}, median: {median_stability:.4f}")
-        print(f"Average IoU (matched boxes): {avg_iou_over_matches:.4f}")
-        print(f"Median box size (w x h): {med_w:.1f} x {med_h:.1f} px")
-        print(f"Recommended pixel-offset heuristic to treat boxes as identical: {suggestion_px_rounded} px (~5% of median box min-dim).")
-        print(f"Per-run fully-matched after expanding by {suggestion_px_rounded}px: {per_run_expanded_match}")
-        print(f"Would the recommendation treat all runs as identical? {would_treat_all_same}")
-        print("Also consider fixed offsets like 5px or 10px depending on image DPI and scaling.")
+    #     stability_avg = float(np.mean(stability_scores)) if stability_scores else 0.0
+    #     stability_std = float(np.std(stability_scores)) if stability_scores else 0.0
+    #     median_stability = float(np.median(stability_scores)) if stability_scores else 0.0
+    #     avg_iou_over_matches = float(np.mean(avg_ious)) if avg_ious else 0.0
+
+    # # Heuristic for recommended pixel offset to treat boxes as identical
+    # # Use median box dimension across all detections and suggest a small fraction
+    # all_widths = []
+    # all_heights = []
+    # for run in detections_list:
+    #     for d in run:
+    #         b = d['box']
+    #         w = abs(b[2] - b[0])
+    #         h = abs(b[3] - b[1])
+    #         all_widths.append(w)
+    #         all_heights.append(h)
+
+    # if all_widths and all_heights:
+    #     med_w = float(np.median(all_widths))
+    #     med_h = float(np.median(all_heights))
+    #     # pixel suggestion: 5px absolute, and also ~5% of median min dimension
+    #     suggestion_px = max(5.0, min(med_w, med_h) * 0.05)
+    #     suggestion_px_rounded = int(round(suggestion_px))
+    # else:
+    #     med_w = med_h = 0.0
+    #     suggestion_px_rounded = 5
+
+    # # Additional check: if we expand each box by suggestion_px_rounded (on all sides),
+    # # would that cause every run to fully match the reference (i.e., every box in
+    # # each run matches some reference box and vice-versa using the same IoU threshold)?
+    # def expand_box(box, px, img_w=None, img_h=None):
+    #     # box: [x_min, y_min, x_max, y_max]
+    #     x0, y0, x1, y1 = box
+    #     x0 -= px
+    #     y0 -= px
+    #     x1 += px
+    #     y1 += px
+    #     if img_w is not None and img_h is not None:
+    #         x0 = max(0, x0)
+    #         y0 = max(0, y0)
+    #         x1 = min(img_w, x1)
+    #         y1 = min(img_h, y1)
+    #     return [x0, y0, x1, y1]
+
+    # def all_boxes_match_after_expansion(ref_boxes, other_boxes, px_expand, iou_threshold=0.5):
+    #     # Expand both sets and perform greedy matching. True if both sets are fully matched.
+    #     if not ref_boxes and not other_boxes:
+    #         return True
+    #     if not ref_boxes or not other_boxes:
+    #         return False
+
+    #     # Expand boxes
+    #     ref_exp = [expand_box(b, px_expand) for b in ref_boxes]
+    #     oth_exp = [expand_box(b, px_expand) for b in other_boxes]
+
+    #     # compute IoU matrix
+    #     mat = np.zeros((len(ref_exp), len(oth_exp)), dtype=float)
+    #     for i, rb in enumerate(ref_exp):
+    #         for j, ob in enumerate(oth_exp):
+    #             mat[i, j] = iou(rb, ob)
+
+    #     # greedy match
+    #     ref_idx = list(range(len(ref_exp)))
+    #     oth_idx = list(range(len(oth_exp)))
+    #     matches = 0
+    #     m = mat.copy()
+    #     while m.size:
+    #         idx = np.unravel_index(np.argmax(m), m.shape)
+    #         best_i, best_j = idx[0], idx[1]
+    #         best_val = m[best_i, best_j]
+    #         if best_val < iou_threshold:
+    #             break
+    #         matches += 1
+    #         m = np.delete(m, best_i, axis=0)
+    #         m = np.delete(m, best_j, axis=1)
+    #         del ref_idx[best_i]
+    #         del oth_idx[best_j]
+
+    #     # Fully matched if matches equals both lengths
+    #     return (matches == len(ref_exp)) and (matches == len(oth_exp))
+
+    # would_treat_all_same = False
+    # per_run_expanded_match = []
+    # try:
+    #     if len(detections_list) == 0:
+    #         would_treat_all_same = False
+    #     else:
+    #         ref = detections_list[0]
+    #         ref_boxes = [d['box'] for d in ref]
+    #         for run in detections_list:
+    #             other_boxes = [d['box'] for d in run]
+    #             matched = all_boxes_match_after_expansion(ref_boxes, other_boxes, suggestion_px_rounded, iou_threshold=0.5)
+    #             per_run_expanded_match.append(bool(matched))
+    #         would_treat_all_same = all(per_run_expanded_match) if per_run_expanded_match else False
+    # except Exception:
+    #     would_treat_all_same = False
+
+    # # Print results
+    # print(f"Average processing time over {runs} runs: {avg_time:.4f} seconds")
+    # print("--- Stability summary (reference = first run) ---")
+    # if len(detections_list) == 0:
+    #     print("No detections recorded.")
+    # else:
+    #     print(f"Per-run similarity ratios vs first run: {[round(s,3) for s in stability_scores]}")
+    #     print(f"Stability average: {stability_avg:.4f}, std: {stability_std:.4f}, median: {median_stability:.4f}")
+    #     print(f"Average IoU (matched boxes): {avg_iou_over_matches:.4f}")
+    #     print(f"Median box size (w x h): {med_w:.1f} x {med_h:.1f} px")
+    #     print(f"Recommended pixel-offset heuristic to treat boxes as identical: {suggestion_px_rounded} px (~5% of median box min-dim).")
+    #     print(f"Per-run fully-matched after expanding by {suggestion_px_rounded}px: {per_run_expanded_match}")
+    #     print(f"Would the recommendation treat all runs as identical? {would_treat_all_same}")
+    #     print("Also consider fixed offsets like 5px or 10px depending on image DPI and scaling.")
 
 
-    # Draw and save the last-run detections for inspection
-    if pil_img:
-        image_path = os.path.join(os.getcwd(), "last_frame_for_detections.png")
-        pil_img.save(image_path)
-    try:
-        src_img = cv2.imread(image_path)
-        if src_img is not None:
-            res_img = draw_detections(image=src_img, detections=detections, model_name=meiki.model_name)
-            out_path = Path(image_path).with_name(f"detection_result_{meiki.model_name}.png")
-            cv2.imwrite(str(out_path), res_img)
-            print(f"Saved detection visualization to: {out_path}")
-        else:
-            print(f"Could not read image for visualization: {image_path}")
-    except Exception as e:
-        print(f"Error drawing/saving detections: {e}")
+    # # Draw and save the last-run detections for inspection
+    # if pil_img:
+    #     image_path = os.path.join(os.getcwd(), "last_frame_for_detections.png")
+    #     pil_img.save(image_path)
+    # try:
+    #     src_img = cv2.imread(image_path)
+    #     if src_img is not None:
+    #         res_img = draw_detections(image=src_img, detections=detections, model_name=meiki.model_name)
+    #         out_path = Path(image_path).with_name(f"detection_result_{meiki.model_name}.png")
+    #         cv2.imwrite(str(out_path), res_img)
+    #         print(f"Saved detection visualization to: {out_path}")
+    #     else:
+    #         print(f"Could not read image for visualization: {image_path}")
+    # except Exception as e:
+    #     print(f"Error drawing/saving detections: {e}")
 
     # print(f"Average processing time over {runs} runs: {avg_time:.4f} seconds")
 

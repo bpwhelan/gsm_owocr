@@ -3,7 +3,7 @@ import sys
 
 from GameSentenceMiner.ocr.gsm_ocr_config import set_dpi_awareness, get_scene_ocr_config
 from GameSentenceMiner.util.gsm_utils import do_text_replacements, OCR_REPLACEMENTS_FILE
-from GameSentenceMiner.util.electron_config import get_ocr_language, get_ocr_requires_open_window, \
+from GameSentenceMiner.util.electron_config import get_ocr_language, get_ocr_ocr2, get_ocr_requires_open_window, \
     has_ocr_config_changed, reload_electron_config, get_ocr_scan_rate, get_ocr_two_pass_ocr, get_ocr_keep_newline, \
     get_ocr_ocr1, get_furigana_filter_sensitivity
 
@@ -1040,6 +1040,10 @@ class OBSScreenshotThread(threading.Thread):
         obs.update_current_game()
         current_sources = obs.get_active_video_sources()
         self.current_source = source if source else obs.get_best_source_for_screenshot()
+        if not self.current_source:
+            time.sleep(1)
+            self.init_config(source=source, scene=scene)
+            return
         logger.debug(f"Current OBS source: {self.current_source}")
         self.source_width = self.current_source.get(
             "sceneItemTransform").get("sourceWidth") or self.width
@@ -1259,21 +1263,38 @@ def engine_change_handler(user_input='s', is_combo=True):
             f'Switched to <{engine_color}>{new_engine_name}</{engine_color}>!')
 
 
-def engine_change_handler_name(engine):
+def engine_change_handler_name(engine, switch=True):
     global engine_index
     old_engine_index = engine_index
+    
+    if engine not in get_engine_names():
+        for _, engine_class in sorted(inspect.getmembers(sys.modules[__name__],
+                                                     lambda x: hasattr(x, '__module__') and x.__module__ and (
+        __package__ + '.ocr' in x.__module__ or __package__ + '.secret' in x.__module__) and inspect.isclass(
+                                                         x))):
+            if engine_class.name == engine:
+                if config.get_engine(engine_class.name) == None:
+                    engine_instance = engine_class()
+                else:
+                    engine_instance = engine_class(config.get_engine(
+                        engine_class.name), lang=get_ocr_language())
 
-    for i, instance in enumerate(engine_instances):
-        if instance.name.lower() in engine.lower():
-            engine_index = i
-            break
+                if engine_instance.available:
+                    engine_instances.append(engine_instance)
+                    engine_keys.append(engine_class.key)
 
-    if engine_index != old_engine_index:
-        new_engine_name = engine_instances[engine_index].readable_name
-        notifier.send(title='owocr', message=f'Switched to {new_engine_name}')
-        engine_color = config.get_general('engine_color')
-        logger.opt(ansi=True).info(
-            f'Switched to <{engine_color}>{new_engine_name}</{engine_color}>!')
+    if switch:
+        for i, instance in enumerate(engine_instances):
+            if instance.name.lower() in engine.lower():
+                engine_index = i
+                break
+
+        if engine_index != old_engine_index:
+            new_engine_name = engine_instances[engine_index].readable_name
+            notifier.send(title='owocr', message=f'Switched to {new_engine_name}')
+            engine_color = config.get_general('engine_color')
+            logger.opt(ansi=True).info(
+                f'Switched to <{engine_color}>{new_engine_name}</{engine_color}>!')
 
 
 def user_input_thread_run():
@@ -1653,7 +1674,7 @@ def run(read_from=None,
                                                      lambda x: hasattr(x, '__module__') and x.__module__ and (
         __package__ + '.ocr' in x.__module__ or __package__ + '.secret' in x.__module__) and inspect.isclass(
                                                          x))):
-        if len(config_engines) == 0 or engine_class.name in config_engines:
+        if engine_class.name in [get_ocr_ocr1(), get_ocr_ocr2()]:
             if config.get_engine(engine_class.name) == None:
                 engine_instance = engine_class()
             else:
@@ -1838,8 +1859,9 @@ def run(read_from=None,
         nonlocal last_result
         if any(c in changes for c in ('ocr1', 'ocr2', 'language', 'furigana_filter_sensitivity')):
             last_result = ([], engine_index)
-            engine_change_handler_name(get_ocr_ocr1())
-            
+            engine_change_handler_name(get_ocr_ocr1(), switch=True)
+            engine_change_handler_name(get_ocr_ocr2(), switch=False)
+
     def handle_area_config_changes(changes):
         if screenshot_thread:
             screenshot_thread.ocr_config = get_scene_ocr_config()
@@ -1961,3 +1983,7 @@ def run(read_from=None,
         key_combo_listener.stop()
     if config_check_thread:
         config_check_thread.join()
+
+def get_engine_names():
+    global engine_instances
+    return [instance.name for instance in engine_instances]
