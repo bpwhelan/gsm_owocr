@@ -1793,14 +1793,14 @@ class localLLMOCR:
         except Exception as e:
             return (False, f'Local LLM OCR request failed: {e}')
         
-import os
-import onnxruntime as ort
-import numpy as np
-import cv2
-from huggingface_hub import hf_hub_download
-from PIL import Image
-import requests
-from io import BytesIO
+# import os
+# import onnxruntime as ort
+# import numpy as np
+# import cv2
+# from huggingface_hub import hf_hub_download
+# from PIL import Image
+# import requests
+# from io import BytesIO
 
 # --- HELPER FUNCTION FOR VISUALIZATION (Optional but useful) ---
 def draw_detections(image: np.ndarray, detections: list, model_name: str) -> np.ndarray:
