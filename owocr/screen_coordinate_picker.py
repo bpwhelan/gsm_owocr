@@ -2,6 +2,10 @@
 # import mss
 # from PIL import Image
 
+
+# No-op for import not to break
+def get_screen_selection():
+    pass
 # try:
 #     from PIL import ImageTk
 #     import tkinter as tk
@@ -82,7 +86,6 @@
 # def run_screen_selector(result):
 #     selector = ScreenSelector(result)
 #     selector.start()
-
 
 # def get_screen_selection():
 #     if not selector_available:
