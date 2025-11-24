@@ -104,14 +104,14 @@ class Config:
         else:
             self.__provided_cli_args = {}
         config = configparser.ConfigParser()
-        res = config.read(self.config_path)
+        res = config.read(self.config_path, encoding='utf-8')
 
         if len(res) == 0:
             try:
                 config_folder = os.path.join(os.path.expanduser('~'),'.config')
                 if not os.path.isdir(config_folder):
                     os.makedirs(config_folder)
-                urllib.request.urlretrieve('https://github.com/AuroraWright/owocr/raw/master/owocr_config.ini', self.config_path)
+                urllib.request.urlretrieve('https://raw.githubusercontent.com/bpwhelan/gsm_owocr/master/owocr_config.ini', self.config_path)
                 self.downloaded_config = True
             finally:
                 return
