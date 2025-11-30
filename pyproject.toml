@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 authors = [
     { name = "Beangate", email = "bpwhelan95@gmail.com"}
 ]
-license = "Apache-2.0"
+license = "GPL-3.0-only"
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
@@ -24,11 +24,9 @@ dependencies = [
     "pynput<=1.7.8",
     "websockets>=14.0",
     "desktop-notifier>=6.1.0",
-    "mss",
-    "pysbd",
-    "langid",
+    "mss>=10.1.0",
     "psutil",
-    "requests",
+    "curl_cffi",
     "pywin32;platform_system=='Windows'",
     "pyobjc;platform_system=='Darwin'"
 ]
@@ -38,23 +36,28 @@ faster-png = [
     "fpng-py"
 ]
 
-accurate-filtering = [
-    "transformers",
-    "sentencepiece"
-]
-
 easyocr = [
     "easyocr"
 ]
 
 rapidocr = [
-    "rapidocr",
-    "onnxruntime",
-    "rapidocr_onnxruntime"
+    "rapidocr>=3.4.0",
+    "onnxruntime"
+]
+
+meikiocr = [
+    "meikiocr"
 ]
 
 mangaocr = [
-    "manga-ocr"
+    "manga-ocr",
+    "setuptools<80",
+    "scipy",
+    "pyclipper",
+    "torchvision",
+    "torch-summary",
+    "opencv-python",
+    "shapely"
 ]
 
 winocr = [
@@ -62,15 +65,11 @@ winocr = [
 ]
 
 oneocr = [
-    "oneocr"
+    "oneocr>=1.0.9"
 ]
 
 lens = [
     "betterproto==2.0.0b7"
-]
-
-lensweb = [
-    "pyjson5"
 ]
 
 gvision = [
@@ -91,4 +90,7 @@ owocr = "owocr.__main__:main"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["owocr", "owocr.*"]
+include = ["owocr*", "comic_text_detector*"]
+
+[tool.setuptools.package-data]
+comic_text_detector = ["LICENSE"]
