@@ -17,7 +17,7 @@ import rapidfuzz.fuzz
 from PIL import Image
 from loguru import logger
 import regex
-import requests
+import curl_cffi
 
 
 try:
@@ -353,10 +353,10 @@ class GoogleLens:
         }
 
         try:
-            res = requests.post('https://lensfrontend-pa.googleapis.com/v1/crupload', data=payload, headers=headers, timeout=5)
-        except requests.exceptions.Timeout:
+            res = curl_cffi.post('https://lensfrontend-pa.googleapis.com/v1/crupload', data=payload, headers=headers, impersonate='chrome', timeout=20)
+        except curl_cffi.exceptions.Timeout:
             return (False, 'Request timeout!')
-        except requests.exceptions.ConnectionError:
+        except curl_cffi.exceptions.ConnectionError:
             return (False, 'Connection error!')
 
         if res.status_code != 200:
@@ -489,100 +489,6 @@ class GoogleLens:
 
         return (pil_image_to_bytes(img), img.width, img.height)
 
-class GoogleLensWeb:
-    name = 'glensweb'
-    readable_name = 'Google Lens (web)'
-    key = 'k'
-    available = False
-
-    def __init__(self, lang='ja'):
-        if 'pyjson5' not in sys.modules:
-            logger.warning('pyjson5 not available, Google Lens (web) will not work!')
-        else:
-            self.requests_session = requests.Session()
-            self.available = True
-            logger.info('Google Lens (web) ready')
-
-    def __call__(self, img, furigana_filter_sensitivity=0):
-        img, is_path = input_to_pil_image(img)
-        if not img:
-            return (False, 'Invalid image provided')
-
-        url = 'https://lens.google.com/v3/upload'
-        files = {'encoded_image': ('image.png', self._preprocess(img), 'image/png')}
-        headers = {
-            'Host': 'lens.google.com',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'ja-JP;q=0.6,ja;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br, zstd',
-            'Referer': 'https://www.google.com/',
-            'Origin': 'https://www.google.com',
-            'Alt-Used': 'lens.google.com',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-site',
-            'Priority': 'u=0, i',
-            'TE': 'trailers'
-        }
-        cookies = {'SOCS': 'CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg'}
-
-        try:
-            res = self.requests_session.post(url, files=files, headers=headers, cookies=cookies, timeout=5, allow_redirects=False)
-        except requests.exceptions.Timeout:
-            return (False, 'Request timeout!')
-        except requests.exceptions.ConnectionError:
-            return (False, 'Connection error!')
-
-        if res.status_code != 303:
-            return (False, 'Unknown error!')
-
-        redirect_url = res.headers.get('Location')
-        if not redirect_url:
-            return (False, 'Error getting redirect URL!')
-
-        parsed_url = urlparse(redirect_url)
-        query_params = parse_qs(parsed_url.query)
-
-        if ('vsrid' not in query_params) or ('gsessionid' not in query_params):
-            return (False, 'Unknown error!')
-
-        try:
-            res = self.requests_session.get(f"https://lens.google.com/qfmetadata?vsrid={query_params['vsrid'][0]}&gsessionid={query_params['gsessionid'][0]}", timeout=5)
-        except requests.exceptions.Timeout:
-            return (False, 'Request timeout!')
-        except requests.exceptions.ConnectionError:
-            return (False, 'Connection error!')
-
-        if (len(res.text.splitlines()) != 3):
-            return (False, 'Unknown error!')
-
-        lens_object = pyjson5.loads(res.text.splitlines()[2])
-
-        res = ''
-        text = lens_object[0][2][0][0]
-        for paragraph in text:
-            for line in paragraph[1]:
-                for word in line[0]:
-                    res += word[1] + word[2]
-            res += '\n'
-
-        x = (True, res)
-
-        # img.close()
-        return x
-
-    def _preprocess(self, img):
-        if img.width * img.height > 3000000:
-            aspect_ratio = img.width / img.height
-            new_w = int(sqrt(3000000 * aspect_ratio))
-            new_h = int(new_w / aspect_ratio)
-            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
-        return pil_image_to_bytes(img)
-
 class Bing:
     name = 'bing'
     readable_name = 'Bing'
@@ -590,8 +496,7 @@ class Bing:
     available = False
 
     def __init__(self, lang='ja'):
-        self.requests_session = requests.Session()
-        self.requests_session.proxies={"http": None, "https": None}
+        self.requests_session = curl_cffi.Session()
         self.available = True
         logger.info('Bing ready')
 
@@ -606,25 +511,19 @@ class Bing:
 
         upload_url = 'https://www.bing.com/images/search?view=detailv2&iss=sbiupload'
         upload_headers = {
-            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'accept-language': 'ja-JP;q=0.6,ja;q=0.5',
-            'cache-control': 'max-age=0',
             'origin': 'https://www.bing.com',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0',
         }
-        files = {
-            'imgurl': (None, ''),
-            'cbir': (None, 'sbi'),
-            'imageBin': (None, img_bytes)
-        }
-
+        mp = curl_cffi.CurlMime()
+        mp.addpart(name='imgurl', data='')
+        mp.addpart(name='cbir', data='sbi')
+        mp.addpart(name='imageBin', data=img_bytes)
         for _ in range(2):
             api_host = urlparse(upload_url).netloc
             try:
-                res = self.requests_session.post(upload_url, headers=upload_headers, files=files, timeout=5, allow_redirects=False)
-            except requests.exceptions.Timeout:
+                res = self.requests_session.post(upload_url, headers=upload_headers, multipart=mp, allow_redirects=False, impersonate='chrome', timeout=20)
+            except curl_cffi.requests.exceptions.Timeout:
                 return (False, 'Request timeout!')
-            except requests.exceptions.ConnectionError:
+            except curl_cffi.requests.exceptions.ConnectionError:
                 return (False, 'Connection error!')
 
             if res.status_code != 302:
@@ -647,25 +546,21 @@ class Bing:
 
         api_url = f'https://{api_host}/images/api/custom/knowledge'
         api_headers = {
-            'accept': '*/*',
-            'accept-language': 'ja-JP;q=0.6,ja;q=0.5',
             'origin': 'https://www.bing.com',
             'referer': f'https://www.bing.com/images/search?view=detailV2&insightstoken={image_insights_token}',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0',
         }
         api_data_json = {
             'imageInfo': {'imageInsightsToken': image_insights_token, 'source': 'Url'},
             'knowledgeRequest': {'invokedSkills': ['OCR'], 'index': 1}
         }
-        files = {
-            'knowledgeRequest': (None, json.dumps(api_data_json), 'application/json')
-        }
+        mp2 = curl_cffi.CurlMime()
+        mp2.addpart(name='knowledgeRequest', content_type='application/json', data=json.dumps(api_data_json))
 
         try:
-            res = self.requests_session.post(api_url, headers=api_headers, files=files, timeout=5)
-        except requests.exceptions.Timeout:
+            res = self.requests_session.post(api_url, headers=api_headers, multipart=mp2, impersonate='chrome', timeout=5)
+        except curl_cffi.requests.exceptions.Timeout:
             return (False, 'Request timeout!')
-        except requests.exceptions.ConnectionError:
+        except curl_cffi.requests.exceptions.ConnectionError:
             return (False, 'Connection error!')
 
         if res.status_code != 200:
@@ -875,10 +770,10 @@ class WinRTOCR:
         else:
             params = {'lang': 'ja'}
             try:
-                res = requests.post(self.url, params=params, data=self._preprocess(img), timeout=3)
-            except requests.exceptions.Timeout:
+                res = curl_cffi.post(self.url, params=params, data=self._preprocess(img), timeout=3)
+            except curl_cffi.requests.exceptions.Timeout:
                 return (False, 'Request timeout!')
-            except requests.exceptions.ConnectionError:
+            except curl_cffi.requests.exceptions.ConnectionError:
                 return (False, 'Connection error!')
 
             if res.status_code != 200:
@@ -1052,20 +947,19 @@ class OneOCR:
                     res = ocr_resp['text']
                     return_resp = ocr_resp
                     
-                if multiple_crop_coords:
-                    for line in filtered_lines:
-                        crop_coords_list.append(
-                            (line['bounding_rect']['x1'] - 5, line['bounding_rect']['y1'] - 5,
-                             line['bounding_rect']['x3'] + 5, line['bounding_rect']['y3'] + 5))
+                for line in filtered_lines:
+                    crop_coords_list.append(
+                        (line['bounding_rect']['x1'] - 5, line['bounding_rect']['y1'] - 5,
+                            line['bounding_rect']['x3'] + 5, line['bounding_rect']['y3'] + 5, line['text']))
 
             except RuntimeError as e:
                 return (False, e)
         else:
             try:
-                res = requests.post(self.url, data=self._preprocess(img), timeout=3)
-            except requests.exceptions.Timeout:
+                res = curl_cffi.post(self.url, data=self._preprocess(img), timeout=3)
+            except curl_cffi.requests.exceptions.Timeout:
                 return (False, 'Request timeout!')
-            except requests.exceptions.ConnectionError:
+            except curl_cffi.requests.exceptions.ConnectionError:
                 return (False, 'Connection error!')
 
             if res.status_code != 200:
@@ -1076,8 +970,7 @@ class OneOCR:
         x = [True, res]
         if return_coords:
             x.append(filtered_lines)
-        if multiple_crop_coords:
-            x.append(crop_coords_list)
+        x.append(crop_coords_list)
         if return_one_box:
             x.append(crop_coords)
         if return_dict:
@@ -1215,11 +1108,10 @@ class MeikiOCR:
                 res = ocr_resp['text']
                 return_resp = ocr_resp
                 
-            if multiple_crop_coords:
-                for line in filtered_lines:
-                    crop_coords_list.append(
-                        (line['bounding_rect']['x1'] - 5, line['bounding_rect']['y1'] - 5,
-                         line['bounding_rect']['x3'] + 5, line['bounding_rect']['y3'] + 5))
+            for line in filtered_lines:
+                crop_coords_list.append(
+                    (line['bounding_rect']['x1'] - 5, line['bounding_rect']['y1'] - 5,
+                        line['bounding_rect']['x3'] + 5, line['bounding_rect']['y3'] + 5))
 
         except RuntimeError as e:
             return (False, str(e))
@@ -1497,10 +1389,10 @@ class OCRSpace:
         files = {'file': ('image.' + img_extension, img_bytes, 'image/' + img_extension)}
 
         try:
-            res = requests.post('https://api.ocr.space/parse/image', data=data, files=files, timeout=5)
-        except requests.exceptions.Timeout:
+            res = curl_cffi.post('https://api.ocr.space/parse/image', data=data, files=files, timeout=5)
+        except curl_cffi.requests.exceptions.Timeout:
             return (False, 'Request timeout!')
-        except requests.exceptions.ConnectionError:
+        except curl_cffi.requests.exceptions.ConnectionError:
             return (False, 'Connection error!')
 
         if res.status_code != 200:

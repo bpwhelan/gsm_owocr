@@ -1157,21 +1157,40 @@ def scale_down_width_height(width, height):
             return width, height
 
 
-def apply_ocr_config_to_image(img, ocr_config, is_secondary=False, rectangles=None):
-    for rectangle in ocr_config.rectangles:
-        if rectangle.is_excluded:
-            left, top, width, height = rectangle.coordinates
-            draw = ImageDraw.Draw(img)
-            draw.rectangle((left, top, left + width, top + height), fill=(0, 0, 0, 0))
-            
+def apply_ocr_config_to_image(img, ocr_config, is_secondary=False, rectangles=None, return_full_size=False):
     if not rectangles:   
         rectangles = [r for r in ocr_config.rectangles if not r.is_excluded and r.is_secondary == is_secondary]
     
+    # If no rectangles to process, return the original image
+    if not rectangles:
+        return img
+    
     # Sort top to bottom
-    if rectangles:
-        rectangles.sort(key=lambda r: r.coordinates[1])
-
-    cropped_sections = []
+    rectangles.sort(key=lambda r: r.coordinates[1])
+    
+    # Optimization: if only one rectangle and not forced to return full size, just return the cropped area
+    if len(rectangles) == 1 and not return_full_size:
+        rectangle = rectangles[0]
+        area = rectangle.coordinates
+        # Ensure crop coordinates are within image bounds
+        left = max(0, area[0])
+        top = max(0, area[1])
+        right = min(img.width, area[0] + area[2])
+        bottom = min(img.height, area[1] + area[3])
+        
+        # Return original image if coordinates are invalid
+        if left >= right or top >= bottom:
+            return img
+            
+        try:
+            return img.crop((left, top, right, bottom))
+        except ValueError:
+            logger.warning("Error cropping image region, returning original")
+            return img
+    
+    # Create a transparent canvas with the same size as the original image
+    composite_img = Image.new("RGBA", (img.width, img.height), (0, 0, 0, 0))
+    
     for rectangle in rectangles:
         area = rectangle.coordinates
         # Ensure crop coordinates are within image bounds
@@ -1179,24 +1198,22 @@ def apply_ocr_config_to_image(img, ocr_config, is_secondary=False, rectangles=No
         top = max(0, area[1])
         right = min(img.width, area[0] + area[2])
         bottom = min(img.height, area[1] + area[3])
-        crop = img.crop((left, top, right, bottom))
-        cropped_sections.append(crop)
-
-    if len(cropped_sections) > 1:
-        # Width is the max width of all sections, height is the sum of all sections + gaps
-        # Gaps are 50 pixels between sections
-        combined_width = max(section.width for section in cropped_sections)
-        combined_height = sum(section.height for section in cropped_sections) + (
-            len(cropped_sections) - 1) * 50
-        combined_img = Image.new("RGBA", (combined_width, combined_height))
-        y_offset = 0
-        for section in cropped_sections:
-            combined_img.paste(section, (0, y_offset))
-            y_offset += section.height + 50
-        img = combined_img
-    elif cropped_sections:
-        img = cropped_sections[0]
-    return img
+        
+        # Skip if the coordinates result in an invalid box
+        if left >= right or top >= bottom:
+            continue
+            
+        try:
+            cropped_image = img.crop((left, top, right, bottom))
+            # Paste the cropped image onto the canvas at its original location
+            paste_x = int(left)
+            paste_y = int(top)
+            composite_img.paste(cropped_image, (paste_x, paste_y))
+        except ValueError:
+            logger.warning("Error cropping image region, skipping rectangle")
+            continue
+    
+    return composite_img
 
 
 class AutopauseTimer:
@@ -1389,8 +1406,8 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
     
     start_time = time.time()
     result = engine_instance(img_or_path, furigana_filter_sensitivity)
-    res, text, crop_coords = (*result, None)[:3]
-
+    res, text, crop_coords_list, crop_coords = (list(result) + [None]*4)[:4]
+    
     if not res and ocr_2 == engine:
         logger.opt(ansi=True).info(
             f"<{engine_color}>{engine_instance.readable_name}</{engine_color}> failed with message: {text}, trying <{engine_color}>{ocr_1}</{engine_color}>")
@@ -1402,7 +1419,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
                 break
         start_time = time.time()
         result = engine_instance(img_or_path, furigana_filter_sensitivity)
-        res, text, crop_coords = (*result, None)[:3]
+        res, text, crop_coords_list, crop_coords = (list(result) + [None]*4)[:4]
 
     end_time = time.time()
 
@@ -1436,7 +1453,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
             notifier.send(title='owocr', message='Text recognized: ' + text)
             
         if text and write_to is not None:
-            if check_text_is_all_menu(text, crop_coords):
+            if check_text_is_all_menu(text, crop_coords, crop_coords_list):
                 logger.opt(ansi=True).info('Text is identified as all menu items, skipping further processing.')
                 return orig_text, ''
             
@@ -1465,89 +1482,74 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
 
     return orig_text, text
 
-def check_text_is_all_menu(text: str, crop_coords: tuple) -> bool:
+def check_text_is_all_menu(text: str, crop_coords: tuple, crop_coords_list: list) -> bool:
     """
     Checks if the recognized text consists entirely of menu items.
-    This function checks if the detected text area falls entirely within secondary rectangles (menu areas).
+    This function checks if ALL detected text areas fall entirely within secondary rectangles (menu areas).
 
     :param text: The recognized text from OCR.
-    :param crop_coords: Tuple containing (x, y, x2, y2) of the detected text area relative to the cropped image.
-    :return: True if the text is all menu items (within secondary rectangles), False otherwise.
+    :param crop_coords: Tuple containing (x, y, x2, y2) of the detected text area in original image coordinates.
+    :param crop_coords_list: List of tuples, each containing (x, y, x2, y2) of detected text areas.
+    :return: True if ALL text areas are within menu rectangles, False otherwise.
     """
-    if not text or not crop_coords:
+    if not text:
+        return False
+    
+    # Build the list of coordinates to check
+    if crop_coords_list:
+        coords_to_check = crop_coords_list
+    elif crop_coords:
+        coords_to_check = [crop_coords]
+    else:
         return False
 
     original_width = obs_screenshot_thread.width
     original_height = obs_screenshot_thread.height
-    crop_x, crop_y, crop_x2, crop_y2 = crop_coords
 
     ocr_config = get_scene_ocr_config()
     
-    if not any(rect.is_secondary for rect in ocr_config.rectangles):
+    # Early exit if no secondary rectangles are defined
+    if not ocr_config or not any(rect.is_secondary for rect in ocr_config.rectangles):
         return False
 
     ocr_config.scale_to_custom_size(original_width, original_height)
-    if not ocr_config or not ocr_config.rectangles:
-        return False
-
-    primary_rectangles = [rect for rect in ocr_config.rectangles if not rect.is_excluded and not rect.is_secondary]
+    
     menu_rectangles = [rect for rect in ocr_config.rectangles if rect.is_secondary and not rect.is_excluded]
 
     if not menu_rectangles:
         return False
 
-    if not primary_rectangles:
+    # Check if ALL crop coordinates fall entirely within menu rectangles
+    for crop_x, crop_y, crop_x2, crop_y2, text in coords_to_check:
+        # remove 5 pixel padding that was added during OCR cropping
+        crop_x += 5
+        crop_y += 5
+        crop_x2 -= 5
+        crop_y2 -= 5
+        # Validate that crop coordinates are within bounds
         if crop_x < 0 or crop_y < 0 or crop_x2 > original_width or crop_y2 > original_height:
+            logger.info(f"Crop coordinates ({crop_x}, {crop_y}, {crop_x2}, {crop_y2}) are out of bounds.")
             return False
+        
+        # Check if this specific crop area falls within ANY menu rectangle
+        found_in_menu = False
         for menu_rect in menu_rectangles:
             rect_left, rect_top, rect_width, rect_height = menu_rect.coordinates
             rect_right = rect_left + rect_width
             rect_bottom = rect_top + rect_height
+            
             if (crop_x >= rect_left and crop_y >= rect_top and
                 crop_x2 <= rect_right and crop_y2 <= rect_bottom):
-                return True
-        return False
-
-    primary_rectangles.sort(key=lambda r: r.coordinates[1])
-
-    if len(primary_rectangles) == 1:
-        primary_rect = primary_rectangles[0]
-        primary_left, primary_top, primary_width, primary_height = primary_rect.coordinates
-        original_x = crop_x + primary_left
-        original_y = crop_y + primary_top
-        original_x2 = crop_x2 + primary_left
-        original_y2 = crop_y2 + primary_top
-    else:
-        current_y_offset = 0
-        original_x = None
-        original_y = None
-        original_x2 = None
-        original_y2 = None
-        for i, primary_rect in enumerate(primary_rectangles):
-            primary_left, primary_top, primary_width, primary_height = primary_rect.coordinates
-            section_height = primary_height
-            if crop_y >= current_y_offset and crop_y < current_y_offset + section_height:
-                original_x = crop_x + primary_left
-                original_y = (crop_y - current_y_offset) + primary_top
-                original_x2 = crop_x2 + primary_left
-                original_y2 = crop_y2 + primary_top
+                found_in_menu = True
+                # logger.info(f"Crop coordinates ({crop_x}, {crop_y}, {crop_x2}, {crop_y2}) are within menu rectangle ({rect_left}, {rect_top}, {rect_right}, {rect_bottom}).")
                 break
-            current_y_offset += section_height + 50
-        if original_x is None or original_y is None:
+        
+        # If ANY crop coordinate is NOT in a menu rectangle, we have game text - return False
+        if not found_in_menu:
             return False
-
-    if original_x < 0 or original_y < 0 or original_x > original_width or original_y > original_height:
-        return False
-
-    for menu_rect in menu_rectangles:
-        rect_left, rect_top, rect_width, rect_height = menu_rect.coordinates
-        rect_right = rect_left + rect_width
-        rect_bottom = rect_top + rect_height
-        if (original_x >= rect_left and original_y >= rect_top and
-            original_x2 <= rect_right and original_y2 <= rect_bottom):
-            return True
-
-    return False
+    
+    # All crop coordinates are within menu rectangles
+    return True
 
 def get_path_key(path):
     return path, path.lstat().st_mtime
