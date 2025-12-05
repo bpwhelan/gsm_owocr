@@ -1161,12 +1161,19 @@ def apply_ocr_config_to_image(img, ocr_config, is_secondary=False, rectangles=No
     if not rectangles:   
         rectangles = [r for r in ocr_config.rectangles if not r.is_excluded and r.is_secondary == is_secondary]
     
+    for rectangle in ocr_config.rectangles:
+        if rectangle.is_excluded:
+            left, top, width, height = rectangle.coordinates
+            draw = ImageDraw.Draw(img)
+            draw.rectangle((left, top, left + width, top + height), fill=(0, 0, 0, 0))
     # If no rectangles to process, return the original image
     if not rectangles:
         return img
     
     # Sort top to bottom
-    rectangles.sort(key=lambda r: r.coordinates[1])
+    # rectangles.sort(key=lambda r: r.coordinates[1])
+    
+
     
     # Optimization: if only one rectangle and not forced to return full size, just return the cropped area
     if len(rectangles) == 1 and not return_full_size:
@@ -1188,12 +1195,15 @@ def apply_ocr_config_to_image(img, ocr_config, is_secondary=False, rectangles=No
             logger.warning("Error cropping image region, returning original")
             return img
     
-    # Create a transparent canvas with the same size as the original image
-    composite_img = Image.new("RGBA", (img.width, img.height), (0, 0, 0, 0))
+    # Calculate the bounding box of all rectangles
+    min_left = img.width
+    min_top = img.height
+    max_right = 0
+    max_bottom = 0
     
+    valid_rectangles = []
     for rectangle in rectangles:
         area = rectangle.coordinates
-        # Ensure crop coordinates are within image bounds
         left = max(0, area[0])
         top = max(0, area[1])
         right = min(img.width, area[0] + area[2])
@@ -1202,12 +1212,28 @@ def apply_ocr_config_to_image(img, ocr_config, is_secondary=False, rectangles=No
         # Skip if the coordinates result in an invalid box
         if left >= right or top >= bottom:
             continue
-            
+        
+        valid_rectangles.append((rectangle, left, top, right, bottom))
+        min_left = min(min_left, left)
+        min_top = min(min_top, top)
+        max_right = max(max_right, right)
+        max_bottom = max(max_bottom, bottom)
+    
+    # If no valid rectangles, return original image
+    if not valid_rectangles:
+        return img
+    
+    # Create a composite image sized to the bounding box
+    composite_width = max_right - min_left
+    composite_height = max_bottom - min_top
+    composite_img = Image.new("RGBA", (composite_width, composite_height), (0, 0, 0, 0))
+    
+    for rectangle, left, top, right, bottom in valid_rectangles:
         try:
             cropped_image = img.crop((left, top, right, bottom))
-            # Paste the cropped image onto the canvas at its original location
-            paste_x = int(left)
-            paste_y = int(top)
+            # Paste the cropped image onto the canvas at its position relative to the bounding box
+            paste_x = int(left - min_left)
+            paste_y = int(top - min_top)
             composite_img.paste(cropped_image, (paste_x, paste_y))
         except ValueError:
             logger.warning("Error cropping image region, skipping rectangle")
