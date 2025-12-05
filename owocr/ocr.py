@@ -1121,8 +1121,7 @@ class MeikiOCR:
         x = [True, res]
         if return_coords:
             x.append(filtered_lines)
-        if multiple_crop_coords:
-            x.append(crop_coords_list)
+        x.append(crop_coords_list)
         if return_one_box:
             x.append(crop_coords)
         if return_dict:
