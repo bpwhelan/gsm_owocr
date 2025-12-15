@@ -1045,12 +1045,6 @@ class MeikiOCR:
             self.initial_lang = lang
             self.regex = get_regex(lang)
         img, is_path = input_to_pil_image(img)
-        if img.width < 51 or img.height < 51:
-            new_width = max(img.width, 51)
-            new_height = max(img.height, 51)
-            new_img = Image.new("RGBA", (new_width, new_height), (0, 0, 0, 0))
-            new_img.paste(img, ((new_width - img.width) // 2, (new_height - img.height) // 2))
-            img = new_img
         if not img:
             return (False, 'Invalid image provided')
         crop_coords = None
@@ -1064,11 +1058,11 @@ class MeikiOCR:
             
             # # convert back to PIL and save for testing
             
-            # new_img = Image.fromarray(image_np)
-            # if os.path.exists(os.path.expanduser("~/GSM/temp")):
-            #     new_img.save(os.path.join(os.path.expanduser("~/GSM/temp"), 'meikiocr_input.png'))
+            image_np = np.array(img.convert('RGB'))
             
-            image_np = np.array(img)
+            new_img = Image.fromarray(image_np)
+            if os.path.exists(os.path.expanduser("~/GSM/temp")):
+                new_img.save(os.path.join(os.path.expanduser("~/GSM/temp"), 'meikiocr_input.png'))
             
             # Run meikiocr
             read_results = self.model.run_ocr(image_np)
@@ -1800,7 +1794,7 @@ class MeikiTextDetector:
             return False, {'boxes': [], 'provider': 'meiki', 'crop_coords': None}
         
         # Convert PIL to OpenCV BGR format
-        input_image = np.array(img_pil.convert('RGB'))[:, :, ::-1]
+        input_image = np.array(img_pil.convert('RGB'))
         
         # Run detection using meikiocr
         try:
