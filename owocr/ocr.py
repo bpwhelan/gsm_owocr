@@ -1059,7 +1059,16 @@ class MeikiOCR:
         
         try:
             # Convert PIL image to numpy array for meikiocr
-            image_np = np.array(img.convert('RGB'))[:, :, ::-1]
+            # OLD WAY OF COLOR SHIFTING (was causing issues)
+            # image_np = np.array(img.convert('RGB'))[:, :, ::-1]
+            
+            # # convert back to PIL and save for testing
+            
+            # new_img = Image.fromarray(image_np)
+            # if os.path.exists(os.path.expanduser("~/GSM/temp")):
+            #     new_img.save(os.path.join(os.path.expanduser("~/GSM/temp"), 'meikiocr_input.png'))
+            
+            image_np = np.array(img)
             
             # Run meikiocr
             read_results = self.model.run_ocr(image_np)
