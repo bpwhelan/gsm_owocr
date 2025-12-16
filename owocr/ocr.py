@@ -1065,7 +1065,7 @@ class MeikiOCR:
                 new_img.save(os.path.join(os.path.expanduser("~/GSM/temp"), 'meikiocr_input.png'))
             
             # Run meikiocr
-            read_results = self.model.run_ocr(image_np)
+            read_results = self.model.run_ocr(image_np, punct_conf_factor=0.2)
             
             # Convert meikiocr response to OneOCR format
             ocr_resp = self._convert_meikiocr_to_oneocr_format(read_results, img.width, img.height)
