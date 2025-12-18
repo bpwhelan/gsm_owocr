@@ -1157,8 +1157,10 @@ def scale_down_width_height(width, height):
             return width, height
 
 
-def apply_ocr_config_to_image(img, ocr_config, is_secondary=False, rectangles=None, return_full_size=False):
-    if not rectangles:   
+def apply_ocr_config_to_image(img, ocr_config, is_secondary=False, rectangles=None, return_full_size=False, both_types=False):
+    if both_types:
+        rectangles = [r for r in ocr_config.rectangles if not r.is_excluded]
+    elif not rectangles:   
         rectangles = [r for r in ocr_config.rectangles if not r.is_excluded and r.is_secondary == is_secondary]
     
     for rectangle in ocr_config.rectangles:
@@ -1432,7 +1434,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
     
     start_time = time.time()
     result = engine_instance(img_or_path, furigana_filter_sensitivity)
-    res, text, crop_coords_list, crop_coords = (list(result) + [None]*4)[:4]
+    res, text, coords, crop_coords_list, crop_coords, response_dict = (list(result) + [None]*6)[:6]
     
     if not res and ocr_2 == engine:
         logger.opt(ansi=True).info(
@@ -1445,7 +1447,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
                 break
         start_time = time.time()
         result = engine_instance(img_or_path, furigana_filter_sensitivity)
-        res, text, crop_coords_list, crop_coords = (list(result) + [None]*4)[:4]
+        res, text, coords, crop_coords_list, crop_coords, response_dict = (list(result) + [None]*6)[:6]
 
     end_time = time.time()
 
@@ -1459,6 +1461,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
     # print(engine_index)
 
     if res:
+        # Meiki Text Detection
         if 'provider' in text:
             if write_to == 'callback':
                 logger.opt(ansi=True).info(f"{len(text['boxes'])} text boxes recognized in {end_time - start_time:0.03f}s using Meiki:")
@@ -1492,7 +1495,7 @@ def process_and_write_results(img_or_path, write_to=None, last_result=None, filt
             pyperclipfix.copy(text)
         elif write_to == "callback":
             txt_callback(text, orig_text, ocr_start_time,
-                         img_or_path, is_second_ocr, filtering, crop_coords)
+                         img_or_path, is_second_ocr, filtering, crop_coords, response_dict=coords)
         elif write_to:
             with Path(write_to).open('a', encoding='utf-8') as f:
                 f.write(text + '\n')
@@ -1515,7 +1518,7 @@ def check_text_is_all_menu(text: str, crop_coords: tuple, crop_coords_list: list
 
     :param text: The recognized text from OCR.
     :param crop_coords: Tuple containing (x, y, x2, y2) of the detected text area in original image coordinates.
-    :param crop_coords_list: List of tuples, each containing (x, y, x2, y2) of detected text areas.
+    :param crop_coords_list: List of tuples, each containing (x, y, x2, y2, text) of detected text areas.
     :return: True if ALL text areas are within menu rectangles, False otherwise.
     """
     if not text:
@@ -1525,7 +1528,7 @@ def check_text_is_all_menu(text: str, crop_coords: tuple, crop_coords_list: list
     if crop_coords_list:
         coords_to_check = crop_coords_list
     elif crop_coords:
-        coords_to_check = [crop_coords]
+        coords_to_check = [crop_coords + ('',)]  # Add empty text field for consistency
     else:
         return False
 
@@ -1547,7 +1550,7 @@ def check_text_is_all_menu(text: str, crop_coords: tuple, crop_coords_list: list
 
     # Check if ALL crop coordinates fall entirely within menu rectangles
     for crop_x, crop_y, crop_x2, crop_y2, text in coords_to_check:
-        # remove 5 pixel padding that was added during OCR cropping
+    # remove 5 pixel padding that was added during OCR cropping
         crop_x += 5
         crop_y += 5
         crop_x2 -= 5
